@@ -47,6 +47,17 @@ def configure_playwright_browsers_path() -> None:
         os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(bundled)
 
 
+def configure_streamlit_runtime() -> None:
+    defaults = {
+        "STREAMLIT_GLOBAL_DEVELOPMENT_MODE": "false",
+        "STREAMLIT_BROWSER_GATHER_USAGE_STATS": "false",
+        "STREAMLIT_SERVER_PORT": "8501",
+        "STREAMLIT_SERVER_ADDRESS": "127.0.0.1",
+    }
+    for key, value in defaults.items():
+        os.environ.setdefault(key, value)
+
+
 def maybe_run_worker_mode(argv: list[str]) -> int | None:
     if not argv:
         return None
@@ -83,7 +94,16 @@ def run_frozen_streamlit(argv: list[str]) -> int:
         print(f"Erro: ui_app.py nao encontrado no bundle: {app_path}")
         return 1
 
-    sys.argv = ["streamlit", "run", str(app_path), *argv]
+    sys.argv = [
+        "streamlit",
+        "run",
+        str(app_path),
+        "--global.developmentMode=false",
+        "--browser.gatherUsageStats=false",
+        "--server.port=8501",
+        "--server.address=127.0.0.1",
+        *argv,
+    ]
     exit_code = stcli.main()
     return int(exit_code or 0)
 
@@ -112,6 +132,7 @@ def run_dev_streamlit(argv: list[str]) -> int:
 
 def main() -> int:
     configure_playwright_browsers_path()
+    configure_streamlit_runtime()
     extra_args = sys.argv[1:]
     worker_exit = maybe_run_worker_mode(extra_args)
     if worker_exit is not None:

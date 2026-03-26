@@ -79,6 +79,10 @@ echo @echo off
 echo setlocal
 echo set "APP_DIR=%%~dp0"
 echo set "PLAYWRIGHT_BROWSERS_PATH=%%APP_DIR%%ms-playwright"
+echo set "STREAMLIT_GLOBAL_DEVELOPMENT_MODE=false"
+echo set "STREAMLIT_BROWSER_GATHER_USAGE_STATS=false"
+echo set "STREAMLIT_SERVER_PORT=8501"
+echo set "STREAMLIT_SERVER_ADDRESS=127.0.0.1"
 echo if not exist "%%APP_DIR%%.env" if exist "%%APP_DIR%%.env.example" copy "%%APP_DIR%%.env.example" "%%APP_DIR%%.env" ^>nul
 echo "%%APP_DIR%%upseller-rpa-ui.exe" %%*
 ) > "%DIST_APP_DIR%\start.bat"
