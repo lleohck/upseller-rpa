@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local environment/secrets
+.env
+.env.local
+.env.*.local
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+
+# Runtime artifacts
+artifacts/
+storage_state.json
+
+# Playwright reports/artifacts
+playwright-report/
+test-results/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
