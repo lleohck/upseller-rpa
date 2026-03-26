@@ -23,6 +23,7 @@ ms-playwright/
 # Runtime artifacts
 artifacts/
 storage_state.json
+storage_state1.json
 
 # Playwright reports/artifacts
 playwright-report/
