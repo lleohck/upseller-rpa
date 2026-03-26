@@ -461,13 +461,17 @@ def _start_variant_worker(payload: dict) -> None:
     if os.name == "nt":
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
 
-    process = subprocess.Popen(
-        cmd,
-        cwd=worker_cwd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        creationflags=creationflags,
-    )
+    worker_log_fp = log_path.open("a", encoding="utf-8")
+    try:
+        process = subprocess.Popen(
+            cmd,
+            cwd=worker_cwd,
+            stdout=worker_log_fp,
+            stderr=worker_log_fp,
+            creationflags=creationflags,
+        )
+    finally:
+        worker_log_fp.close()
 
     st.session_state["variant_worker"] = {
         "pid": process.pid,
@@ -550,6 +554,9 @@ def _render_variant_worker_panel() -> None:
                 st.json(result)
         except Exception as exc:
             st.error(f"Falha ao ler resultado da automação: {exc}")
+    elif not running and not worker.get("cancelled"):
+        st.error("A automação encerrou sem gerar resultado. Verifique o log abaixo para o erro detalhado.")
+        st.caption(f"Arquivo de log: {log_path}")
 
     if running and auto_refresh:
         time.sleep(1)
