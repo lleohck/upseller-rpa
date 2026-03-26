@@ -282,21 +282,34 @@ def _start_manual_login_worker(login_url: str, maximize_window: bool) -> None:
     if _current_login_worker() is not None:
         raise RuntimeError("Ja existe um login assistido em andamento.")
 
-    worker_script = Path(__file__).resolve().parent / "login_manual_worker.py"
-    if not worker_script.exists():
-        raise RuntimeError(f"Script de worker nao encontrado: {worker_script}")
-
     port = _find_free_port()
     cdp_url = f"http://127.0.0.1:{port}"
 
-    cmd = [
-        sys.executable,
-        str(worker_script),
-        "--login-url",
-        login_url,
-        "--cdp-port",
-        str(port),
-    ]
+    if getattr(sys, "frozen", False):
+        cmd = [
+            sys.executable,
+            "--worker",
+            "login_manual",
+            "--login-url",
+            login_url,
+            "--cdp-port",
+            str(port),
+        ]
+        worker_cwd = str(Path(sys.executable).resolve().parent)
+    else:
+        worker_script = Path(__file__).resolve().parent / "login_manual_worker.py"
+        if not worker_script.exists():
+            raise RuntimeError(f"Script de worker nao encontrado: {worker_script}")
+        cmd = [
+            sys.executable,
+            str(worker_script),
+            "--login-url",
+            login_url,
+            "--cdp-port",
+            str(port),
+        ]
+        worker_cwd = str(worker_script.parent)
+
     if maximize_window:
         cmd.append("--maximize")
 
@@ -306,7 +319,7 @@ def _start_manual_login_worker(login_url: str, maximize_window: bool) -> None:
 
     process = subprocess.Popen(
         cmd,
-        cwd=str(worker_script.parent),
+        cwd=worker_cwd,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         creationflags=creationflags,
@@ -327,7 +340,29 @@ def _start_manual_login_worker(login_url: str, maximize_window: bool) -> None:
     _append_login_log(f"Login manual iniciado (PID={process.pid}, CDP={cdp_url}).")
 
 
-def _save_storage_state_via_cdp(cdp_url: str, storage_state_path: Path) -> str:
+def _score_state_for_domain(state: dict, domain_hint: str) -> int:
+    cookies = list(state.get("cookies", []))
+    origins = list(state.get("origins", []))
+    if not domain_hint:
+        return len(cookies) + len(origins)
+
+    hint = domain_hint.lower().strip()
+    cookie_hits = 0
+    for cookie in cookies:
+        domain = str(cookie.get("domain", "")).lower()
+        if hint in domain:
+            cookie_hits += 1
+
+    origin_hits = 0
+    for origin in origins:
+        origin_url = str(origin.get("origin", "")).lower()
+        if hint in origin_url:
+            origin_hits += 1
+
+    return (cookie_hits * 10) + origin_hits
+
+
+def _save_storage_state_via_cdp(cdp_url: str, storage_state_path: Path) -> tuple[str, int, int]:
     with sync_playwright() as playwright:
         browser = playwright.chromium.connect_over_cdp(cdp_url)
         try:
@@ -335,22 +370,44 @@ def _save_storage_state_via_cdp(cdp_url: str, storage_state_path: Path) -> str:
             if not contexts:
                 raise RuntimeError("Nenhum contexto ativo encontrado no navegador de login.")
 
-            selected_context = contexts[0]
             selected_url = ""
+            domain_hint = "upseller.com"
+            best_state: Optional[dict] = None
+            best_score = -1
 
             for context in contexts:
-                for page in context.pages:
-                    current_url = (page.url or "").strip()
-                    if current_url and current_url != "about:blank":
-                        selected_context = context
-                        selected_url = current_url
-                        break
-                if selected_url:
-                    break
+                try:
+                    state = context.storage_state()
+                except Exception:
+                    continue
+
+                score = _score_state_for_domain(state, domain_hint)
+                if score > best_score:
+                    best_state = state
+                    best_score = score
+                    for page in context.pages:
+                        current_url = (page.url or "").strip()
+                        if current_url and current_url != "about:blank":
+                            selected_url = current_url
+                            if domain_hint in current_url.lower():
+                                break
+
+            if not best_state:
+                raise RuntimeError("Nao foi possivel obter dados de sessao via CDP.")
+
+            cookies_count = len(list(best_state.get("cookies", [])))
+            origins_count = len(list(best_state.get("origins", [])))
+            if cookies_count == 0 and origins_count == 0:
+                raise RuntimeError(
+                    "Sessao vazia detectada. Finalize o login no UpSeller e clique em OK novamente."
+                )
 
             storage_state_path.parent.mkdir(parents=True, exist_ok=True)
-            selected_context.storage_state(path=str(storage_state_path))
-            return selected_url
+            storage_state_path.write_text(
+                json.dumps(best_state, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            return selected_url, cookies_count, origins_count
         finally:
             browser.close()
 
@@ -365,10 +422,6 @@ def _close_login_worker(log_message: Optional[str] = None) -> None:
 
 
 def _start_variant_worker(payload: dict) -> None:
-    worker_script = Path(__file__).resolve().parent / "variant_job_worker.py"
-    if not worker_script.exists():
-        raise RuntimeError(f"Script de worker nao encontrado: {worker_script}")
-
     artifacts_dir = Path(payload.get("artifacts_dir", "artifacts"))
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     job_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -377,23 +430,42 @@ def _start_variant_worker(payload: dict) -> None:
     log_path = artifacts_dir / f"variant_job_{job_id}.log"
     request_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    cmd = [
-        sys.executable,
-        str(worker_script),
-        "--request",
-        str(request_path),
-        "--result",
-        str(result_path),
-        "--log",
-        str(log_path),
-    ]
+    if getattr(sys, "frozen", False):
+        cmd = [
+            sys.executable,
+            "--worker",
+            "variant_job",
+            "--request",
+            str(request_path),
+            "--result",
+            str(result_path),
+            "--log",
+            str(log_path),
+        ]
+        worker_cwd = str(Path(sys.executable).resolve().parent)
+    else:
+        worker_script = Path(__file__).resolve().parent / "variant_job_worker.py"
+        if not worker_script.exists():
+            raise RuntimeError(f"Script de worker nao encontrado: {worker_script}")
+        cmd = [
+            sys.executable,
+            str(worker_script),
+            "--request",
+            str(request_path),
+            "--result",
+            str(result_path),
+            "--log",
+            str(log_path),
+        ]
+        worker_cwd = str(worker_script.parent)
+
     creationflags = 0
     if os.name == "nt":
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
 
     process = subprocess.Popen(
         cmd,
-        cwd=str(worker_script.parent),
+        cwd=worker_cwd,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         creationflags=creationflags,
@@ -541,14 +613,19 @@ def render_login_section(storage_state_path: Path, default_login_url: Optional[s
 
         if confirm_ok:
             try:
-                current_url = _save_storage_state_via_cdp(
+                current_url, cookies_count, origins_count = _save_storage_state_via_cdp(
                     cdp_url=str(worker["cdp_url"]),
                     storage_state_path=storage_state_path,
                 )
                 if current_url:
-                    _append_login_log(f"Sessao salva com sucesso. URL atual: {current_url}")
+                    _append_login_log(
+                        "Sessao salva com sucesso. "
+                        f"URL atual: {current_url} | cookies: {cookies_count} | origins: {origins_count}"
+                    )
                 else:
-                    _append_login_log("Sessao salva com sucesso.")
+                    _append_login_log(
+                        f"Sessao salva com sucesso. cookies: {cookies_count} | origins: {origins_count}"
+                    )
                 st.success(f"Sessão salva com sucesso em {storage_state_path}")
                 _close_login_worker("Processo de login manual finalizado e navegador encerrado.")
             except Exception as exc:

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import shutil
+import tempfile
 import time
+from pathlib import Path
 
 from playwright.sync_api import Page, sync_playwright
 
@@ -52,18 +55,20 @@ def main() -> int:
         "--remote-debugging-address=127.0.0.1",
     ]
     context_kwargs: dict = {}
+    user_data_dir = Path(tempfile.mkdtemp(prefix="upseller_login_worker_"))
 
     if args.maximize:
         launch_args.append("--start-maximized")
         context_kwargs["no_viewport"] = True
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(
+        context = playwright.chromium.launch_persistent_context(
+            user_data_dir=str(user_data_dir),
             headless=False,
             args=launch_args,
+            **context_kwargs,
         )
-        context = browser.new_context(**context_kwargs)
-        page = context.new_page()
+        page = context.pages[0] if context.pages else context.new_page()
 
         if args.maximize:
             force_maximize_window(page)
@@ -82,7 +87,7 @@ def main() -> int:
             pass
         finally:
             context.close()
-            browser.close()
+            shutil.rmtree(user_data_dir, ignore_errors=True)
 
     return 0
 

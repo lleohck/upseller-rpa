@@ -59,10 +59,28 @@ python login.py
 python session.py
 ```
 
-## 6) Build de executavel Windows
+## 6) Build de executavel Windows (sem Python no destino)
 
 ```bat
 build_windows_exe.bat
 ```
 
-Saida esperada: `dist\\upseller-rpa-ui.exe`
+Saida esperada: pasta `dist\\upseller-rpa-ui\\`
+
+Conteudo principal da pasta final:
+- `upseller-rpa-ui.exe`
+- `start.bat`
+- `.env.example`
+- `ms-playwright\\` (browser embutido)
+
+### Publicacao para outro PC Windows
+
+1. Compacte a pasta `dist\\upseller-rpa-ui\\` em `.zip`.
+2. Copie para o computador final.
+3. Extraia em uma pasta simples (ex.: `C:\\UpSellerRPA\\`).
+4. Edite o `.env` (se nao existir, o `start.bat` cria a partir do `.env.example` na primeira execucao).
+5. Execute `start.bat`.
+
+Observacoes:
+- O computador destino nao precisa de Python/IDE.
+- Mantenha toda a pasta junta; nao execute apenas o `.exe` isolado.

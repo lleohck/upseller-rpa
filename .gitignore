@@ -16,6 +16,7 @@ env/
 # Build / packaging
 build/
 dist/
+ms-playwright/
 *.egg-info/
 *.spec
 

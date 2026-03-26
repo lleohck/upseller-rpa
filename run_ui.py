@@ -38,6 +38,43 @@ def find_python_for_dev(root: Path) -> Path | None:
     return None
 
 
+def configure_playwright_browsers_path() -> None:
+    if os.getenv("PLAYWRIGHT_BROWSERS_PATH"):
+        return
+    root = project_root()
+    bundled = root / "ms-playwright"
+    if bundled.exists():
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(bundled)
+
+
+def maybe_run_worker_mode(argv: list[str]) -> int | None:
+    if not argv:
+        return None
+
+    worker_name: str | None = None
+    worker_args: list[str] = []
+
+    if argv[0] == "--worker" and len(argv) >= 2:
+        worker_name = argv[1].strip().lower()
+        worker_args = argv[2:]
+    elif argv[0].startswith("--worker="):
+        worker_name = argv[0].split("=", 1)[1].strip().lower()
+        worker_args = argv[1:]
+    else:
+        return None
+
+    if worker_name == "variant_job":
+        from variant_job_worker import main as worker_main
+    elif worker_name == "login_manual":
+        from login_manual_worker import main as worker_main
+    else:
+        print(f"Worker invalido: {worker_name}")
+        return 2
+
+    sys.argv = [worker_name, *worker_args]
+    return int(worker_main() or 0)
+
+
 def run_frozen_streamlit(argv: list[str]) -> int:
     from streamlit.web import cli as stcli
 
@@ -74,7 +111,11 @@ def run_dev_streamlit(argv: list[str]) -> int:
 
 
 def main() -> int:
+    configure_playwright_browsers_path()
     extra_args = sys.argv[1:]
+    worker_exit = maybe_run_worker_mode(extra_args)
+    if worker_exit is not None:
+        return worker_exit
     if getattr(sys, "frozen", False):
         return run_frozen_streamlit(extra_args)
     return run_dev_streamlit(extra_args)
