@@ -1,0 +1,57 @@
+# UpSeller RPA
+
+Automacao web com Python + Playwright para operar variantes no painel da UpSeller.
+
+## 1) Setup local (.venv)
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate  # Linux/mac
+# .venv\\Scripts\\activate  # Windows
+pip install -r requirements.txt
+python -m playwright install chromium
+```
+
+## 2) Configuracao
+
+1. Copie `.env.example` para `.env`.
+2. Preencha as variaveis necessarias (`UPSELLER_DRAFT_URL`, `UPSELLER_VARIANT_NAME`, `UPSELLER_OPTION_NAMES`, etc.).
+   - Se quiser pular criacao da variante e ir direto para opcoes: `UPSELLER_SKIP_VARIANT_CREATION=true`.
+3. Garanta que `storage_state.json` esteja valido.
+
+## 3) Interface visual (Fase 2)
+
+### Linux/mac
+
+```bash
+./run_ui.sh
+```
+
+### Windows
+
+```bat
+run_ui.bat
+```
+
+O launcher detecta ambiente ativo; se nao houver, tenta usar `.venv` local.
+
+## 4) CLI de automacao
+
+```bash
+python variant.py
+```
+
+## 5) Renovacao de sessao
+
+```bash
+python login.py
+python session.py
+```
+
+## 6) Build de executavel Windows
+
+```bat
+build_windows_exe.bat
+```
+
+Saida esperada: `dist\\upseller-rpa-ui.exe`
