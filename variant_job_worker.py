@@ -35,6 +35,7 @@ def main() -> int:
         keep_browser_open=bool(payload.get("keep_browser_open", True)),
         skip_variant_creation=bool(payload.get("skip_variant_creation", False)),
         option_description_template=payload.get("option_description_template") or None,
+        option_price_brl=payload.get("option_price_brl") or None,
         action_timeout_ms=int(payload.get("action_timeout_ms", 40000)),
         artifacts_dir=Path(payload.get("artifacts_dir", "artifacts")),
     )
@@ -45,10 +46,19 @@ def main() -> int:
         with log_path.open("a", encoding="utf-8") as fp:
             fp.write(line + "\n")
 
-    result = run_variant_job(job_input=job_input, log_cb=on_log)
+    def write_result_json(result_obj) -> None:
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = result_path.with_suffix(".tmp.json")
+        tmp_path.write_text(result_obj.to_json(), encoding="utf-8")
+        tmp_path.replace(result_path)
 
-    result_path.parent.mkdir(parents=True, exist_ok=True)
-    result_path.write_text(result.to_json(), encoding="utf-8")
+    result = run_variant_job(
+        job_input=job_input,
+        log_cb=on_log,
+        result_ready_cb=write_result_json,
+    )
+
+    write_result_json(result)
 
     return 0 if result.success else 1
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -11,6 +12,7 @@ from playwright.sync_api import Locator, Page, TimeoutError as PlaywrightTimeout
 
 LogCallback = Callable[[str], None]
 WaitBeforeCloseCallback = Callable[[str], None]
+ResultReadyCallback = Callable[["VariantJobResult"], None]
 
 VARIANT_TAB_SELECTORS = [
     "label.ant-radio-wrapper:has-text('Variantes')",
@@ -85,6 +87,19 @@ DESCRIPTION_BLUR_SELECTORS = [
     "#description .ant-card-head-title",
     "div#description",
 ]
+SALES_TABLE_ROW_SELECTORS = [
+    "table.vxe-table--body tbody tr.vxe-body--row:has(td[colid='col_12'])",
+    "table.vxe-table--body tbody tr:has(td[colid='col_12'])",
+]
+ROW_PRICE_INPUT_SELECTORS = [
+    "td[colid='col_12'] input.ant-input-number-input",
+    "input.ant-input-number-input",
+]
+PRICE_BLUR_SELECTORS = [
+    "#salesInfo .ant-card-head",
+    "#salesInfo",
+    "body",
+]
 
 
 @dataclass
@@ -99,6 +114,7 @@ class VariantJobInput:
     keep_browser_open: bool = False
     skip_variant_creation: bool = False
     option_description_template: Optional[str] = None
+    option_price_brl: Optional[str] = None
     action_timeout_ms: int = 30000
     artifacts_dir: Path = Path("artifacts")
 
@@ -109,8 +125,10 @@ class VariantJobResult:
     created_options: list[str] = field(default_factory=list)
     skipped_options: list[str] = field(default_factory=list)
     described_options: list[str] = field(default_factory=list)
+    priced_options: list[str] = field(default_factory=list)
     error_message: Optional[str] = None
     screenshot_path: Optional[str] = None
+    final_page_screenshot_path: Optional[str] = None
     log_lines: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -119,8 +137,10 @@ class VariantJobResult:
             "created_options": self.created_options,
             "skipped_options": self.skipped_options,
             "described_options": self.described_options,
+            "priced_options": self.priced_options,
             "error_message": self.error_message,
             "screenshot_path": self.screenshot_path,
+            "final_page_screenshot_path": self.final_page_screenshot_path,
             "log_lines": self.log_lines,
         }
 
@@ -141,10 +161,31 @@ def normalize_option_names(raw: str | Iterable[str]) -> list[str]:
     return values
 
 
+def normalize_price_brl(raw: str) -> str:
+    clean = raw.strip().replace("R$", "").replace("r$", "").replace(" ", "")
+    clean = clean.replace("\u00a0", "")
+    if not clean:
+        raise ValueError("Preco(R$) invalido. Informe um valor como 99,90 ou 99.90.")
+
+    if "," in clean and "." in clean:
+        if clean.rfind(",") > clean.rfind("."):
+            clean = clean.replace(".", "").replace(",", ".")
+        else:
+            clean = clean.replace(",", "")
+    else:
+        clean = clean.replace(",", ".")
+
+    if not re.fullmatch(r"\d+(\.\d{1,2})?", clean):
+        raise ValueError("Preco(R$) invalido. Use formato como 99,90 ou 99.90.")
+
+    return clean
+
+
 def run_variant_job(
     job_input: VariantJobInput,
     log_cb: Optional[LogCallback] = None,
     wait_before_close_cb: Optional[WaitBeforeCloseCallback] = None,
+    result_ready_cb: Optional[ResultReadyCallback] = None,
 ) -> VariantJobResult:
     result = VariantJobResult(success=False)
     page: Optional[Page] = None
@@ -182,6 +223,14 @@ def run_variant_job(
         except Exception as exc:
             log(f"Aviso: falha na espera antes de fechar navegador: {exc}")
 
+    def publish_result_ready() -> None:
+        if not result_ready_cb:
+            return
+        try:
+            result_ready_cb(result)
+        except Exception as exc:
+            log(f"Aviso: falha ao publicar resultado parcial/final: {exc}")
+
     try:
         _validate_input(job_input)
     except ValueError as exc:
@@ -202,6 +251,8 @@ def run_variant_job(
     log(f"Opcoes solicitadas: {job_input.option_names}")
     if job_input.option_description_template:
         log("Template de descricao detectado. Apos criar opcoes, sera preenchida a descricao por linha.")
+    if job_input.option_price_brl:
+        log(f"Preco por opcao detectado: R$ {job_input.option_price_brl}")
 
     with sync_playwright() as playwright:
         context = None
@@ -231,6 +282,7 @@ def run_variant_job(
                     "Sessao invalida/expirada. Renove o storage_state executando login.py e session.py."
                 )
                 log(result.error_message)
+                publish_result_ready()
                 maybe_wait_before_close("Sessao invalida detectada.")
                 return result
 
@@ -249,6 +301,7 @@ def run_variant_job(
                     log,
                 )
                 _click_first_visible(page, SAVE_BUTTON_SELECTORS, job_input.action_timeout_ms, "Salvar Variante", log)
+                log(f"Variacao criada com sucesso: {job_input.variant_name}")
 
             for option_name in job_input.option_names:
                 if _option_already_exists(page, option_name):
@@ -275,16 +328,33 @@ def run_variant_job(
                     )
                     result.described_options.extend(described)
 
+            if job_input.option_price_brl:
+                priced = _fill_prices_for_options(
+                    page=page,
+                    option_names=list(dict.fromkeys(job_input.option_names)),
+                    price_value=job_input.option_price_brl,
+                    timeout_ms=job_input.action_timeout_ms,
+                    log=log,
+                )
+                result.priced_options.extend(priced)
+
             context.storage_state(path=str(job_input.storage_state_path))
             log(f"storage_state atualizado em: {job_input.storage_state_path}")
+
+            final_screenshot = _save_page_screenshot(page, job_input.artifacts_dir, "variant_final")
+            if final_screenshot:
+                result.final_page_screenshot_path = str(final_screenshot)
+                log(f"Print final salvo em: {final_screenshot}")
 
             result.success = True
             log(
                 "Execucao concluida. "
                 f"Criadas: {len(result.created_options)} | "
                 f"Ignoradas: {len(result.skipped_options)} | "
-                f"Descritas: {len(result.described_options)}"
+                f"Descritas: {len(result.described_options)} | "
+                f"Precificadas: {len(result.priced_options)}"
             )
+            publish_result_ready()
             maybe_wait_before_close("Execucao concluida com sucesso.")
             return result
 
@@ -294,7 +364,9 @@ def run_variant_job(
             screenshot_path = _save_error_screenshot(page, job_input.artifacts_dir)
             if screenshot_path:
                 result.screenshot_path = str(screenshot_path)
+                result.final_page_screenshot_path = str(screenshot_path)
                 log(f"Screenshot salva em: {screenshot_path}")
+            publish_result_ready()
             maybe_wait_before_close("Execucao finalizada com erro.")
             return result
 
@@ -321,6 +393,9 @@ def _validate_input(job_input: VariantJobInput) -> None:
     if job_input.option_description_template is not None:
         cleaned = job_input.option_description_template.strip()
         job_input.option_description_template = cleaned or None
+    if job_input.option_price_brl is not None:
+        cleaned_price = str(job_input.option_price_brl).strip()
+        job_input.option_price_brl = normalize_price_brl(cleaned_price) if cleaned_price else None
 
 
 def _session_invalid(page: Page, login_url: Optional[str]) -> bool:
@@ -494,16 +569,139 @@ def _fill_single_row_description(
     log(f"Descricao preenchida para opcao: {option_name}")
 
 
+def _fill_prices_for_options(
+    page: Page,
+    option_names: list[str],
+    price_value: str,
+    timeout_ms: int,
+    log: LogCallback,
+) -> list[str]:
+    _wait_for_sales_rows(page, minimum_rows=1, timeout_ms=timeout_ms)
+    priced_options: list[str] = []
+
+    for option_name in option_names:
+        row = _find_row_for_option_sale(page, option_name, timeout_ms=timeout_ms)
+        _fill_single_row_price(page, row, option_name, price_value, timeout_ms, log)
+        priced_options.append(option_name)
+
+    return priced_options
+
+
+def _wait_for_sales_rows(page: Page, minimum_rows: int, timeout_ms: int) -> None:
+    started = time.monotonic()
+    while (time.monotonic() - started) * 1000 < timeout_ms:
+        rows = _sales_rows(page)
+        try:
+            if rows.count() >= minimum_rows:
+                return
+        except Exception:
+            pass
+        page.wait_for_timeout(250)
+
+    raise RuntimeError(
+        "Tabela de Informacoes de Venda nao encontrada/insuficiente. "
+        "Ajuste os seletores de SALES_TABLE_ROW_SELECTORS."
+    )
+
+
+def _sales_rows(page: Page) -> Locator:
+    for selector in SALES_TABLE_ROW_SELECTORS:
+        locator = page.locator(selector)
+        try:
+            if locator.count() > 0:
+                return locator
+        except Exception:
+            continue
+    return page.locator(SALES_TABLE_ROW_SELECTORS[0])
+
+
+def _find_row_for_option_sale(page: Page, option_name: str, timeout_ms: int) -> Locator:
+    started = time.monotonic()
+    option_key = _normalize_text(option_name)
+    while (time.monotonic() - started) * 1000 < timeout_ms:
+        rows = _sales_rows(page)
+        try:
+            count = rows.count()
+        except Exception:
+            count = 0
+
+        contains_match: Optional[Locator] = None
+        for idx in range(count):
+            row = rows.nth(idx)
+            try:
+                if not row.is_visible():
+                    continue
+                product_cell = row.locator("td[colid='col_9'] .d_ib").first
+                raw_text = product_cell.inner_text() if product_cell.count() > 0 else row.inner_text()
+                cell_key = _normalize_text(raw_text)
+                if not cell_key:
+                    continue
+                if cell_key == option_key:
+                    return row
+                if option_key in cell_key:
+                    contains_match = row
+            except Exception:
+                continue
+
+        if contains_match is not None:
+            return contains_match
+
+        page.wait_for_timeout(250)
+
+    raise RuntimeError(f"Nao encontrei linha de venda para opcao: {option_name}")
+
+
+def _fill_single_row_price(
+    page: Page,
+    row: Locator,
+    option_name: str,
+    price_value: str,
+    timeout_ms: int,
+    log: LogCallback,
+) -> None:
+    price_input = _first_visible_locator_in_scope(
+        scope=row,
+        page=page,
+        selectors=ROW_PRICE_INPUT_SELECTORS,
+        timeout_ms=min(timeout_ms, 4000),
+    )
+    if price_input is None:
+        row.locator("td[colid='col_12']").first.click()
+        price_input = _first_visible_locator_in_scope(
+            scope=row,
+            page=page,
+            selectors=ROW_PRICE_INPUT_SELECTORS,
+            timeout_ms=min(timeout_ms, 4000),
+        )
+    if price_input is None:
+        raise RuntimeError(f"Nao encontrei campo de preco para opcao: {option_name}")
+
+    price_input.click()
+    price_input.press("ControlOrMeta+A")
+    price_input.fill(price_value)
+    price_input.press("Enter")
+
+    if not _click_first_visible_optional(page, PRICE_BLUR_SELECTORS, timeout_ms=1000):
+        page.mouse.click(8, 8)
+
+    page.wait_for_timeout(200)
+    log(f"Preco aplicado com sucesso: {option_name} -> R$ {price_value}")
+
+
 def _normalize_text(value: str) -> str:
     return " ".join(value.split()).strip().lower()
 
 
 def _save_error_screenshot(page: Optional[Page], artifacts_dir: Path) -> Optional[Path]:
+    return _save_page_screenshot(page, artifacts_dir, "variant_error")
+
+
+def _save_page_screenshot(page: Optional[Page], artifacts_dir: Path, prefix: str) -> Optional[Path]:
     if not page:
         return None
     try:
         artifacts_dir.mkdir(parents=True, exist_ok=True)
-        file_path = artifacts_dir / f"variant_error_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        file_path = artifacts_dir / f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
         page.screenshot(path=str(file_path), full_page=True)
         return file_path
     except Exception:

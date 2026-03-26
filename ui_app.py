@@ -17,7 +17,7 @@ import streamlit as st
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
 
-from rpa.variant_runner import normalize_option_names
+from rpa.variant_runner import normalize_option_names, normalize_price_brl
 
 FORCED_HEADFUL = True
 FORCED_MAXIMIZE_WINDOW = True
@@ -46,6 +46,7 @@ def render_summary(
     created: list[str],
     skipped: list[str],
     described: list[str],
+    priced: list[str],
     error_message: str | None,
 ) -> None:
     if success:
@@ -53,10 +54,11 @@ def render_summary(
     else:
         st.error("Execução finalizada com erro.")
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     col1.metric("Opções criadas", len(created))
     col2.metric("Opções ignoradas", len(skipped))
     col3.metric("Descrições aplicadas", len(described))
+    col4.metric("Preços aplicados", len(priced))
 
     if created:
         st.write("Criadas:", created)
@@ -64,8 +66,106 @@ def render_summary(
         st.write("Ignoradas (duplicadas):", skipped)
     if described:
         st.write("Com descrição aplicada:", described)
+    if priced:
+        st.write("Com preço aplicado:", priced)
     if error_message:
         st.write("Erro:", error_message)
+
+
+def _status_text(label: str, status: str) -> str:
+    icon_map = {
+        "OK": "✅",
+        "Pulado": "⏭️",
+        "Falha": "❌",
+    }
+    icon = icon_map.get(status, "ℹ️")
+    return f"{icon} {label} - {status}"
+
+
+def _compute_final_statuses(result: dict, request_payload: dict) -> tuple[str, str, str, str]:
+    success = bool(result.get("success"))
+    created = list(result.get("created_options", []))
+    skipped = list(result.get("skipped_options", []))
+    described = list(result.get("described_options", []))
+    priced = list(result.get("priced_options", []))
+
+    skip_variant_creation = bool(request_payload.get("skip_variant_creation", False))
+    option_template = str(request_payload.get("option_description_template") or "").strip()
+    option_price = str(request_payload.get("option_price_brl") or "").strip()
+    requested_options = list(request_payload.get("option_names", []))
+
+    if skip_variant_creation:
+        variant_status = "Pulado"
+    else:
+        variant_status = "OK" if success else "Falha"
+
+    if created:
+        options_status = "OK"
+    elif success and (skipped or not requested_options):
+        options_status = "Pulado"
+    else:
+        options_status = "Falha"
+
+    if not option_template:
+        description_status = "Pulado"
+    elif created and len(described) >= len(created):
+        description_status = "OK"
+    elif success and not created:
+        description_status = "Pulado"
+    else:
+        description_status = "Falha"
+
+    if not option_price:
+        price_status = "Pulado"
+    elif priced and len(priced) >= len(requested_options):
+        price_status = "OK"
+    else:
+        price_status = "Falha"
+
+    return variant_status, options_status, description_status, price_status
+
+
+def render_final_checklist(result: dict, request_payload: dict) -> None:
+    variant_status, options_status, description_status, price_status = _compute_final_statuses(result, request_payload)
+    st.markdown("**Checklist Final**")
+    st.write(_status_text("Variação", variant_status))
+    st.write(_status_text("Opções", options_status))
+    st.write(_status_text("Descrição", description_status))
+    st.write(_status_text("Preço", price_status))
+
+
+def _status_icon(status: str) -> str:
+    return {
+        "OK": "✅",
+        "Pulado": "⏭️",
+        "Falha": "❌",
+    }.get(status, "ℹ️")
+
+
+def render_visual_result_component(result: dict, request_payload: dict) -> None:
+    variant_status, options_status, description_status, price_status = _compute_final_statuses(result, request_payload)
+    st.markdown("**Resultado Visual**")
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Variação", f"{_status_icon(variant_status)} {variant_status}")
+    col2.metric("Opções", f"{_status_icon(options_status)} {options_status}")
+    col3.metric("Descrição", f"{_status_icon(description_status)} {description_status}")
+    col4.metric("Preço", f"{_status_icon(price_status)} {price_status}")
+
+
+def render_print_component(result: dict) -> None:
+    final_path = str(result.get("final_page_screenshot_path") or "").strip()
+    error_path = str(result.get("screenshot_path") or "").strip()
+    image_path = final_path or error_path
+
+    st.markdown("**Print Final da Página**")
+    if not image_path:
+        st.info("Print não disponível nesta execução.")
+        return
+
+    screenshot = Path(image_path)
+    if screenshot.exists():
+        st.image(str(screenshot), caption=f"Print final: {screenshot.name}")
+    st.write("Caminho do print:", image_path)
 
 
 def _now() -> str:
@@ -306,11 +406,7 @@ def _render_variant_worker_panel() -> None:
     st.subheader("Execução da Automação")
     if running:
         st.info(f"Automação em execução (PID {pid}).")
-        auto_refresh = st.checkbox(
-            "Atualizar logs automaticamente",
-            value=True,
-            key="variant_worker_auto_refresh",
-        )
+        auto_refresh = True
     elif worker.get("cancelled"):
         st.warning("Automação cancelada.")
         auto_refresh = False
@@ -334,22 +430,28 @@ def _render_variant_worker_panel() -> None:
             st.session_state["variant_worker"] = None
             st.rerun()
 
-    if not running and result_path.exists() and not worker.get("cancelled"):
+    if result_path.exists() and not worker.get("cancelled"):
         try:
             result = json.loads(result_path.read_text(encoding="utf-8"))
+            request_payload: dict = {}
+            request_path_str = worker.get("request_path")
+            if request_path_str:
+                request_path = Path(str(request_path_str))
+                if request_path.exists():
+                    request_payload = json.loads(request_path.read_text(encoding="utf-8"))
+
+            st.markdown("**Resultado da Execução**")
             render_summary(
                 success=bool(result.get("success")),
                 created=list(result.get("created_options", [])),
                 skipped=list(result.get("skipped_options", [])),
                 described=list(result.get("described_options", [])),
+                priced=list(result.get("priced_options", [])),
                 error_message=result.get("error_message"),
             )
-            screenshot_path = result.get("screenshot_path")
-            if screenshot_path:
-                screenshot = Path(str(screenshot_path))
-                if screenshot.exists():
-                    st.image(str(screenshot), caption=f"Screenshot de erro: {screenshot.name}")
-                st.write("Caminho da screenshot:", str(screenshot_path))
+            render_visual_result_component(result=result, request_payload=request_payload)
+            render_final_checklist(result=result, request_payload=request_payload)
+            render_print_component(result=result)
             with st.expander("Detalhes (JSON)"):
                 st.json(result)
         except Exception as exc:
@@ -516,6 +618,12 @@ def main() -> None:
             placeholder="Descrição da opção {{OPTION_NAME}} xxxxxxxx",
             help="Use {{OPTION_NAME}} para injetar automaticamente o nome de cada opção.",
         )
+        option_price_brl_raw = st.text_input(
+            "Preço (R$) das opções (opcional)",
+            value=os.getenv("UPSELLER_OPTION_PRICE_BRL", "").strip(),
+            placeholder="Ex.: 99,90",
+            help="Se preenchido, aplica o mesmo valor para todas as opções adicionadas.",
+        )
 
         submit = st.form_submit_button("Executar RPA", use_container_width=True)
 
@@ -529,6 +637,13 @@ def main() -> None:
             return
 
         options = normalize_option_names(option_names_raw)
+        option_price_brl = option_price_brl_raw.strip() or None
+        price_error: Optional[str] = None
+        if option_price_brl:
+            try:
+                option_price_brl = normalize_price_brl(option_price_brl)
+            except ValueError as exc:
+                price_error = str(exc)
 
         if not draft_url.strip():
             st.error("Preencha a URL do rascunho (DRAFT_URL).")
@@ -536,6 +651,8 @@ def main() -> None:
             st.error("Preencha o nome da variante (VARIANT_NAME).")
         elif not options:
             st.error("Preencha OPTION_NAMES com ao menos 1 opção.")
+        elif price_error:
+            st.error(price_error)
         else:
             payload = {
                 "draft_url": draft_url.strip(),
@@ -548,6 +665,7 @@ def main() -> None:
                 "keep_browser_open": FORCED_KEEP_BROWSER_OPEN,
                 "skip_variant_creation": skip_variant_creation,
                 "option_description_template": option_description_template.strip() or None,
+                "option_price_brl": option_price_brl,
                 "action_timeout_ms": FORCED_ACTION_TIMEOUT_MS,
                 "artifacts_dir": "artifacts",
             }
