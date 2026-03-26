@@ -65,6 +65,14 @@ python session.py
 build_windows_exe.bat
 ```
 
+Se der erro e a janela fechar, rode pelo `cmd`:
+
+```bat
+build_windows_exe.bat
+```
+
+O script gera log em `build_windows_exe.log` com o detalhe do erro.
+
 Saida esperada: pasta `dist\\upseller-rpa-ui\\`
 
 Conteudo principal da pasta final:
