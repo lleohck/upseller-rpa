@@ -39,6 +39,7 @@ def main() -> int:
     skip_variant_creation = bool_env("UPSELLER_SKIP_VARIANT_CREATION", default=False)
     option_description_template = os.getenv("UPSELLER_OPTION_DESCRIPTION_TEMPLATE", "").strip() or None
     option_price_brl = os.getenv("UPSELLER_OPTION_PRICE_BRL", "").strip() or None
+    apply_variant_images = bool_env("UPSELLER_APPLY_VARIANT_IMAGES", default=False)
 
     job_input = VariantJobInput(
         draft_url=draft_url,
@@ -52,6 +53,7 @@ def main() -> int:
         skip_variant_creation=skip_variant_creation,
         option_description_template=option_description_template,
         option_price_brl=option_price_brl,
+        apply_variant_images=apply_variant_images,
         action_timeout_ms=int(os.getenv("UPSELLER_ACTION_TIMEOUT_MS", "30000").strip() or "30000"),
         artifacts_dir=Path("artifacts"),
     )
@@ -74,6 +76,8 @@ def main() -> int:
             print(f"- Descricoes aplicadas: {result.described_options}")
         if option_price_brl:
             print(f"- Precos aplicados: {result.priced_options}")
+        if apply_variant_images:
+            print(f"- Midia aplicada em todas as variantes: {result.media_images_applied}")
     else:
         print("\nResumo:")
         print(f"- Erro: {result.error_message}")

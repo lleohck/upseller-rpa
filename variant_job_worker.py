@@ -36,6 +36,7 @@ def main() -> int:
         skip_variant_creation=bool(payload.get("skip_variant_creation", False)),
         option_description_template=payload.get("option_description_template") or None,
         option_price_brl=payload.get("option_price_brl") or None,
+        apply_variant_images=bool(payload.get("apply_variant_images", False)),
         action_timeout_ms=int(payload.get("action_timeout_ms", 40000)),
         artifacts_dir=Path(payload.get("artifacts_dir", "artifacts")),
     )

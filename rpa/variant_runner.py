@@ -100,6 +100,35 @@ PRICE_BLUR_SELECTORS = [
     "#salesInfo",
     "body",
 ]
+MEDIA_CARD_SELECTORS = [
+    "div#media",
+    "div.ant-card#media",
+]
+COPY_IMAGE_TO_SELECTORS = [
+    "#media a:has-text('Copiar Imagem ao')",
+    "#media .my_dropdown_btn a:has-text('Copiar Imagem ao')",
+    "a:has-text('Copiar Imagem ao')",
+]
+COPY_IMAGE_ALL_VARIANTS_SELECTORS = [
+    ".ant-dropdown-menu-item:has-text('Todas as Variantes')",
+    "li:has-text('Todas as Variantes')",
+    "text=Todas as Variantes",
+]
+COPY_IMAGE_MODAL_SELECTORS = [
+    ".ant-modal-content:has-text('Copiar Imagem ao')",
+    ".ant-modal-content:has-text('Todas as Variantes')",
+    ".ant-modal-content",
+]
+COPY_IMAGE_SELECT_ALL_SELECTORS = [
+    ".ant-modal-content label:has-text('Selecionado Todos')",
+    ".ant-modal-content label:has-text('Selecionar Todos')",
+    ".ant-modal-content .ant-checkbox-wrapper:has-text('Selecionado Todos')",
+    ".ant-modal-content .ant-checkbox-wrapper:has-text('Selecionar Todos')",
+]
+COPY_IMAGE_CONFIRM_SELECTORS = [
+    ".ant-modal-content button:has-text('Confirmar')",
+    "button:has-text('Confirmar')",
+]
 
 
 @dataclass
@@ -115,6 +144,7 @@ class VariantJobInput:
     skip_variant_creation: bool = False
     option_description_template: Optional[str] = None
     option_price_brl: Optional[str] = None
+    apply_variant_images: bool = False
     action_timeout_ms: int = 30000
     artifacts_dir: Path = Path("artifacts")
 
@@ -126,6 +156,7 @@ class VariantJobResult:
     skipped_options: list[str] = field(default_factory=list)
     described_options: list[str] = field(default_factory=list)
     priced_options: list[str] = field(default_factory=list)
+    media_images_applied: bool = False
     error_message: Optional[str] = None
     screenshot_path: Optional[str] = None
     final_page_screenshot_path: Optional[str] = None
@@ -138,6 +169,7 @@ class VariantJobResult:
             "skipped_options": self.skipped_options,
             "described_options": self.described_options,
             "priced_options": self.priced_options,
+            "media_images_applied": self.media_images_applied,
             "error_message": self.error_message,
             "screenshot_path": self.screenshot_path,
             "final_page_screenshot_path": self.final_page_screenshot_path,
@@ -253,6 +285,8 @@ def run_variant_job(
         log("Template de descricao detectado. Apos criar opcoes, sera preenchida a descricao por linha.")
     if job_input.option_price_brl:
         log(f"Preco por opcao detectado: R$ {job_input.option_price_brl}")
+    if job_input.apply_variant_images:
+        log("Aplicacao de imagens da variacao habilitada.")
 
     with sync_playwright() as playwright:
         context = None
@@ -312,6 +346,16 @@ def run_variant_job(
                 _add_option(page, option_name, job_input.action_timeout_ms, log)
                 result.created_options.append(option_name)
 
+            if job_input.option_price_brl:
+                priced = _fill_prices_for_options(
+                    page=page,
+                    option_names=list(dict.fromkeys(job_input.option_names)),
+                    price_value=job_input.option_price_brl,
+                    timeout_ms=job_input.action_timeout_ms,
+                    log=log,
+                )
+                result.priced_options.extend(priced)
+
             if job_input.option_description_template:
                 if not result.created_options:
                     log(
@@ -328,15 +372,19 @@ def run_variant_job(
                     )
                     result.described_options.extend(described)
 
-            if job_input.option_price_brl:
-                priced = _fill_prices_for_options(
-                    page=page,
-                    option_names=list(dict.fromkeys(job_input.option_names)),
-                    price_value=job_input.option_price_brl,
-                    timeout_ms=job_input.action_timeout_ms,
-                    log=log,
-                )
-                result.priced_options.extend(priced)
+            if job_input.apply_variant_images:
+                if job_input.skip_variant_creation:
+                    _apply_images_to_all_variants(
+                        page=page,
+                        timeout_ms=job_input.action_timeout_ms,
+                        log=log,
+                    )
+                    result.media_images_applied = True
+                else:
+                    log(
+                        "Aplicacao de imagens ignorada: habilite 'Pular criacao da variante' "
+                        "para usar esta etapa."
+                    )
 
             context.storage_state(path=str(job_input.storage_state_path))
             log(f"storage_state atualizado em: {job_input.storage_state_path}")
@@ -352,7 +400,8 @@ def run_variant_job(
                 f"Criadas: {len(result.created_options)} | "
                 f"Ignoradas: {len(result.skipped_options)} | "
                 f"Descritas: {len(result.described_options)} | "
-                f"Precificadas: {len(result.priced_options)}"
+                f"Precificadas: {len(result.priced_options)} | "
+                f"Midia aplicada: {'sim' if result.media_images_applied else 'nao'}"
             )
             publish_result_ready()
             maybe_wait_before_close("Execucao concluida com sucesso.")
@@ -686,6 +735,47 @@ def _fill_single_row_price(
 
     page.wait_for_timeout(200)
     log(f"Preco aplicado com sucesso: {option_name} -> R$ {price_value}")
+
+
+def _apply_images_to_all_variants(page: Page, timeout_ms: int, log: LogCallback) -> None:
+    _, media_card = _first_visible_locator(page, MEDIA_CARD_SELECTORS, timeout_ms)
+    media_card.scroll_into_view_if_needed()
+    page.wait_for_timeout(250)
+
+    _click_first_visible(page, COPY_IMAGE_TO_SELECTORS, timeout_ms, "Copiar Imagem ao", log)
+    _click_first_visible(page, COPY_IMAGE_ALL_VARIANTS_SELECTORS, timeout_ms, "Todas as Variantes", log)
+    _first_visible_locator(page, COPY_IMAGE_MODAL_SELECTORS, timeout_ms)
+
+    _check_select_all_in_copy_modal(page=page, timeout_ms=timeout_ms)
+    _click_first_visible(page, COPY_IMAGE_CONFIRM_SELECTORS, timeout_ms, "Confirmar Copia de Imagem", log)
+    _wait_until_none_visible(page, COPY_IMAGE_MODAL_SELECTORS, timeout_ms=min(timeout_ms, 10000))
+
+    log("Imagens da variacao aplicadas com sucesso para todas as variantes.")
+
+
+def _check_select_all_in_copy_modal(page: Page, timeout_ms: int) -> None:
+    # Tenta primeiro por acessibilidade; fallback para seletores CSS fornecidos.
+    labels = [
+        "Selecionado Todos",
+        "Selecionar Todos",
+        "Selecionado todos",
+        "Selecionar todos",
+    ]
+    for label in labels:
+        checkbox = page.get_by_role("checkbox", name=label)
+        try:
+            if checkbox.count() > 0 and checkbox.first.is_visible():
+                try:
+                    if not checkbox.first.is_checked():
+                        checkbox.first.check()
+                except Exception:
+                    checkbox.first.click()
+                return
+        except Exception:
+            continue
+
+    _, checkbox_like = _first_visible_locator(page, COPY_IMAGE_SELECT_ALL_SELECTORS, timeout_ms)
+    checkbox_like.click()
 
 
 def _normalize_text(value: str) -> str:

@@ -19,6 +19,7 @@ python -m playwright install chromium
    - Se quiser pular criacao da variante e ir direto para opcoes: `UPSELLER_SKIP_VARIANT_CREATION=true`.
    - Se quiser preencher descricao automaticamente por opcao, defina `UPSELLER_OPTION_DESCRIPTION_TEMPLATE` com `{{OPTION_NAME}}` (ex.: `Descricao da opcao {{OPTION_NAME}} xxxxxxxx`).
    - Se quiser aplicar o mesmo preco para todas as opcoes, defina `UPSELLER_OPTION_PRICE_BRL` (ex.: `99,90`).
+   - Se quiser copiar imagem da variacao para todas as variantes no card Midia, defina `UPSELLER_APPLY_VARIANT_IMAGES=true` (use junto com `UPSELLER_SKIP_VARIANT_CREATION=true`).
 3. Garanta que `storage_state.json` esteja valido.
 
 ## 3) Interface visual (Fase 2)

@@ -47,6 +47,7 @@ def render_summary(
     skipped: list[str],
     described: list[str],
     priced: list[str],
+    media_images_applied: bool,
     error_message: str | None,
 ) -> None:
     if success:
@@ -54,11 +55,12 @@ def render_summary(
     else:
         st.error("Execução finalizada com erro.")
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Opções criadas", len(created))
     col2.metric("Opções ignoradas", len(skipped))
     col3.metric("Descrições aplicadas", len(described))
     col4.metric("Preços aplicados", len(priced))
+    col5.metric("Mídia aplicada", "Sim" if media_images_applied else "Não")
 
     if created:
         st.write("Criadas:", created)
@@ -68,6 +70,8 @@ def render_summary(
         st.write("Com descrição aplicada:", described)
     if priced:
         st.write("Com preço aplicado:", priced)
+    if media_images_applied:
+        st.write("Copia de imagens para variantes: concluida.")
     if error_message:
         st.write("Erro:", error_message)
 
@@ -82,16 +86,18 @@ def _status_text(label: str, status: str) -> str:
     return f"{icon} {label} - {status}"
 
 
-def _compute_final_statuses(result: dict, request_payload: dict) -> tuple[str, str, str, str]:
+def _compute_final_statuses(result: dict, request_payload: dict) -> tuple[str, str, str, str, str]:
     success = bool(result.get("success"))
     created = list(result.get("created_options", []))
     skipped = list(result.get("skipped_options", []))
     described = list(result.get("described_options", []))
     priced = list(result.get("priced_options", []))
+    media_images_applied = bool(result.get("media_images_applied", False))
 
     skip_variant_creation = bool(request_payload.get("skip_variant_creation", False))
     option_template = str(request_payload.get("option_description_template") or "").strip()
     option_price = str(request_payload.get("option_price_brl") or "").strip()
+    apply_variant_images = bool(request_payload.get("apply_variant_images", False))
     requested_options = list(request_payload.get("option_names", []))
 
     if skip_variant_creation:
@@ -122,16 +128,29 @@ def _compute_final_statuses(result: dict, request_payload: dict) -> tuple[str, s
     else:
         price_status = "Falha"
 
-    return variant_status, options_status, description_status, price_status
+    if not apply_variant_images:
+        media_status = "Pulado"
+    elif not skip_variant_creation:
+        media_status = "Pulado"
+    elif media_images_applied:
+        media_status = "OK"
+    else:
+        media_status = "Falha"
+
+    return variant_status, options_status, description_status, price_status, media_status
 
 
 def render_final_checklist(result: dict, request_payload: dict) -> None:
-    variant_status, options_status, description_status, price_status = _compute_final_statuses(result, request_payload)
+    variant_status, options_status, description_status, price_status, media_status = _compute_final_statuses(
+        result,
+        request_payload,
+    )
     st.markdown("**Checklist Final**")
     st.write(_status_text("Variação", variant_status))
     st.write(_status_text("Opções", options_status))
     st.write(_status_text("Descrição", description_status))
     st.write(_status_text("Preço", price_status))
+    st.write(_status_text("Mídia", media_status))
 
 
 def _status_icon(status: str) -> str:
@@ -143,13 +162,17 @@ def _status_icon(status: str) -> str:
 
 
 def render_visual_result_component(result: dict, request_payload: dict) -> None:
-    variant_status, options_status, description_status, price_status = _compute_final_statuses(result, request_payload)
+    variant_status, options_status, description_status, price_status, media_status = _compute_final_statuses(
+        result,
+        request_payload,
+    )
     st.markdown("**Resultado Visual**")
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Variação", f"{_status_icon(variant_status)} {variant_status}")
     col2.metric("Opções", f"{_status_icon(options_status)} {options_status}")
     col3.metric("Descrição", f"{_status_icon(description_status)} {description_status}")
     col4.metric("Preço", f"{_status_icon(price_status)} {price_status}")
+    col5.metric("Mídia", f"{_status_icon(media_status)} {media_status}")
 
 
 def render_print_component(result: dict) -> None:
@@ -447,6 +470,7 @@ def _render_variant_worker_panel() -> None:
                 skipped=list(result.get("skipped_options", [])),
                 described=list(result.get("described_options", [])),
                 priced=list(result.get("priced_options", [])),
+                media_images_applied=bool(result.get("media_images_applied", False)),
                 error_message=result.get("error_message"),
             )
             render_visual_result_component(result=result, request_payload=request_payload)
@@ -624,6 +648,11 @@ def main() -> None:
             placeholder="Ex.: 99,90",
             help="Se preenchido, aplica o mesmo valor para todas as opções adicionadas.",
         )
+        apply_variant_images = st.checkbox(
+            "Aplicar imagens da variação (copiar para todas as variantes)",
+            value=bool_env("UPSELLER_APPLY_VARIANT_IMAGES", default=False),
+            help="Executa em Mídia: Copiar Imagem ao -> Todas as Variantes -> Selecionar Todos -> Confirmar.",
+        )
 
         submit = st.form_submit_button("Executar RPA", use_container_width=True)
 
@@ -666,6 +695,7 @@ def main() -> None:
                 "skip_variant_creation": skip_variant_creation,
                 "option_description_template": option_description_template.strip() or None,
                 "option_price_brl": option_price_brl,
+                "apply_variant_images": apply_variant_images,
                 "action_timeout_ms": FORCED_ACTION_TIMEOUT_MS,
                 "artifacts_dir": "artifacts",
             }
