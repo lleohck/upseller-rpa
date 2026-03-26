@@ -93,3 +93,4 @@ Observacoes:
 - O computador destino nao precisa de Python/IDE.
 - Mantenha toda a pasta junta; nao execute apenas o `.exe` isolado.
 - Se abrir `localhost:3000` em branco, refaca o build com a versao mais recente deste projeto e use `start.bat`.
+- O `start.bat` abre automaticamente `http://127.0.0.1:8501`.

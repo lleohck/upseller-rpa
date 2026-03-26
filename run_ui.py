@@ -53,9 +53,14 @@ def configure_streamlit_runtime() -> None:
         "STREAMLIT_BROWSER_GATHER_USAGE_STATS": "false",
         "STREAMLIT_SERVER_PORT": "8501",
         "STREAMLIT_SERVER_ADDRESS": "127.0.0.1",
+        "STREAMLIT_SERVER_HEADLESS": "true",
     }
-    for key, value in defaults.items():
-        os.environ.setdefault(key, value)
+    if getattr(sys, "frozen", False):
+        for key, value in defaults.items():
+            os.environ[key] = value
+    else:
+        for key, value in defaults.items():
+            os.environ.setdefault(key, value)
 
 
 def maybe_run_worker_mode(argv: list[str]) -> int | None:
@@ -97,11 +102,12 @@ def run_frozen_streamlit(argv: list[str]) -> int:
     sys.argv = [
         "streamlit",
         "run",
-        str(app_path),
         "--global.developmentMode=false",
         "--browser.gatherUsageStats=false",
         "--server.port=8501",
         "--server.address=127.0.0.1",
+        "--server.headless=true",
+        str(app_path),
         *argv,
     ]
     exit_code = stcli.main()

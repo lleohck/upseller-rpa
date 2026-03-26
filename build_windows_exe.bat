@@ -83,8 +83,10 @@ echo set "STREAMLIT_GLOBAL_DEVELOPMENT_MODE=false"
 echo set "STREAMLIT_BROWSER_GATHER_USAGE_STATS=false"
 echo set "STREAMLIT_SERVER_PORT=8501"
 echo set "STREAMLIT_SERVER_ADDRESS=127.0.0.1"
+echo set "STREAMLIT_SERVER_HEADLESS=true"
 echo if not exist "%%APP_DIR%%.env" if exist "%%APP_DIR%%.env.example" copy "%%APP_DIR%%.env.example" "%%APP_DIR%%.env" ^>nul
-echo "%%APP_DIR%%upseller-rpa-ui.exe" %%*
+echo start "" cmd /c "timeout /t 3 /nobreak ^>nul ^& start http://127.0.0.1:8501"
+echo "%%APP_DIR%%upseller-rpa-ui.exe" --server.headless=true %%*
 ) > "%DIST_APP_DIR%\start.bat"
 
 call :log "[5/5] Build concluido com sucesso."
