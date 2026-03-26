@@ -45,6 +45,46 @@ LOGIN_PASSWORD_SELECTORS = [
     "input[type='password']",
     "input[autocomplete='current-password']",
 ]
+DESCRIPTION_TABLE_ROW_SELECTORS = [
+    "div.sales_table_wrap tbody tr.vxe-body--row",
+    "div.sales_table_wrap .vxe-table--body tbody tr",
+]
+ROW_DESCRIPTION_ADD_SELECTORS = [
+    "span.my_txt_btn:has-text('Adicionar')",
+    "i.edit_btn.anticon-edit",
+    "i.anticon-edit",
+]
+ROW_DESCRIPTION_INPUT_SELECTORS = [
+    "textarea",
+    "div[contenteditable='true']",
+    "input.ant-input",
+]
+DESCRIPTION_EDITOR_INPUT_SELECTORS = [
+    "div.descript_modal textarea",
+    "div.descript_modal input.ant-input",
+    ".descript_modal textarea",
+    ".descript_modal input.ant-input",
+    ".ant-modal-root textarea",
+    ".ant-modal-root input.ant-input",
+    ".ant-popover textarea",
+    ".ant-popover input.ant-input",
+]
+GLOBAL_DESCRIPTION_INPUT_SELECTORS = [
+    "div.sales_table_wrap textarea",
+    "div.sales_table_wrap div[contenteditable='true']",
+    "div.sales_table_wrap input.ant-input",
+]
+DESCRIPTION_SAVE_SELECTORS = [
+    ".ant-modal-root button:has-text('Salvar')",
+    ".ant-popover button:has-text('Salvar')",
+    ".ant-drawer button:has-text('Salvar')",
+    "div.sales_table_wrap button:has-text('Salvar')",
+]
+DESCRIPTION_BLUR_SELECTORS = [
+    "#description .ant-card-head",
+    "#description .ant-card-head-title",
+    "div#description",
+]
 
 
 @dataclass
@@ -58,6 +98,7 @@ class VariantJobInput:
     maximize_window: bool = True
     keep_browser_open: bool = False
     skip_variant_creation: bool = False
+    option_description_template: Optional[str] = None
     action_timeout_ms: int = 30000
     artifacts_dir: Path = Path("artifacts")
 
@@ -67,6 +108,7 @@ class VariantJobResult:
     success: bool
     created_options: list[str] = field(default_factory=list)
     skipped_options: list[str] = field(default_factory=list)
+    described_options: list[str] = field(default_factory=list)
     error_message: Optional[str] = None
     screenshot_path: Optional[str] = None
     log_lines: list[str] = field(default_factory=list)
@@ -76,6 +118,7 @@ class VariantJobResult:
             "success": self.success,
             "created_options": self.created_options,
             "skipped_options": self.skipped_options,
+            "described_options": self.described_options,
             "error_message": self.error_message,
             "screenshot_path": self.screenshot_path,
             "log_lines": self.log_lines,
@@ -104,6 +147,8 @@ def run_variant_job(
     wait_before_close_cb: Optional[WaitBeforeCloseCallback] = None,
 ) -> VariantJobResult:
     result = VariantJobResult(success=False)
+    page: Optional[Page] = None
+    browser = None
 
     def log(message: str) -> None:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -116,10 +161,21 @@ def run_variant_job(
         if not job_input.keep_browser_open or not job_input.headful:
             return
         if not wait_before_close_cb:
-            log(
-                "Aviso: UPSELLER_KEEP_OPEN=true, mas sem callback de espera. "
-                "O navegador sera fechado automaticamente."
-            )
+            if page is None:
+                log("Aviso: navegador aberto, mas sem pagina ativa para aguardar fechamento manual.")
+                return
+            log(f"{reason} Navegador permanecera aberto. Feche manualmente a janela para encerrar.")
+            while True:
+                try:
+                    if page.is_closed():
+                        log("Janela fechada manualmente. Encerrando processo.")
+                        return
+                    if browser is not None and not browser.is_connected():
+                        log("Browser desconectado. Encerrando processo.")
+                        return
+                    page.wait_for_timeout(500)
+                except Exception:
+                    return
             return
         try:
             wait_before_close_cb(reason)
@@ -144,10 +200,10 @@ def run_variant_job(
     log("Iniciando execucao de variante...")
     log(f"Draft URL: {job_input.draft_url}")
     log(f"Opcoes solicitadas: {job_input.option_names}")
+    if job_input.option_description_template:
+        log("Template de descricao detectado. Apos criar opcoes, sera preenchida a descricao por linha.")
 
     with sync_playwright() as playwright:
-        page: Optional[Page] = None
-        browser = None
         context = None
 
         try:
@@ -156,7 +212,7 @@ def run_variant_job(
 
             if job_input.headful and job_input.maximize_window:
                 launch_args.append("--start-maximized")
-                context_kwargs["viewport"] = None
+                context_kwargs["no_viewport"] = True
 
             browser = playwright.chromium.launch(headless=not job_input.headful, args=launch_args)
             context = browser.new_context(**context_kwargs)
@@ -203,13 +259,31 @@ def run_variant_job(
                 _add_option(page, option_name, job_input.action_timeout_ms, log)
                 result.created_options.append(option_name)
 
+            if job_input.option_description_template:
+                if not result.created_options:
+                    log(
+                        "Template de descricao informado, mas nenhuma opcao nova foi criada. "
+                        "Etapa de descricao ignorada."
+                    )
+                else:
+                    described = _fill_descriptions_for_options(
+                        page=page,
+                        option_names=result.created_options,
+                        template=job_input.option_description_template,
+                        timeout_ms=job_input.action_timeout_ms,
+                        log=log,
+                    )
+                    result.described_options.extend(described)
+
             context.storage_state(path=str(job_input.storage_state_path))
             log(f"storage_state atualizado em: {job_input.storage_state_path}")
 
             result.success = True
             log(
                 "Execucao concluida. "
-                f"Criadas: {len(result.created_options)} | Ignoradas: {len(result.skipped_options)}"
+                f"Criadas: {len(result.created_options)} | "
+                f"Ignoradas: {len(result.skipped_options)} | "
+                f"Descritas: {len(result.described_options)}"
             )
             maybe_wait_before_close("Execucao concluida com sucesso.")
             return result
@@ -244,6 +318,9 @@ def _validate_input(job_input: VariantJobInput) -> None:
         raise ValueError("OPTION_NAMES obrigatoria (ao menos 1 opcao).")
 
     job_input.option_names = normalized
+    if job_input.option_description_template is not None:
+        cleaned = job_input.option_description_template.strip()
+        job_input.option_description_template = cleaned or None
 
 
 def _session_invalid(page: Page, login_url: Optional[str]) -> bool:
@@ -281,6 +358,144 @@ def _add_option(page: Page, option_name: str, timeout_ms: int, log: LogCallback)
     page.get_by_text(option_name, exact=True).first.wait_for(state="visible", timeout=timeout_ms)
     _wait_until_none_visible(page, OPTION_INPUT_SELECTORS, timeout_ms=5000)
     log(f"Opcao adicionada com sucesso: {option_name}")
+
+
+def _fill_descriptions_for_options(
+    page: Page,
+    option_names: list[str],
+    template: str,
+    timeout_ms: int,
+    log: LogCallback,
+) -> list[str]:
+    if "{{OPTION_NAME}}" not in template:
+        log(
+            "Aviso: template de descricao sem {{OPTION_NAME}}. "
+            "O mesmo texto sera aplicado para todas as opcoes."
+        )
+
+    _wait_for_table_rows(page, minimum_rows=1, timeout_ms=timeout_ms)
+    described_options: list[str] = []
+
+    for option_name in option_names:
+        description_text = template.replace("{{OPTION_NAME}}", option_name)
+        row = _find_row_for_option_description(page, option_name, timeout_ms=timeout_ms)
+        _fill_single_row_description(page, row, option_name, description_text, timeout_ms, log)
+        described_options.append(option_name)
+
+    return described_options
+
+
+def _wait_for_table_rows(page: Page, minimum_rows: int, timeout_ms: int) -> None:
+    started = time.monotonic()
+    while (time.monotonic() - started) * 1000 < timeout_ms:
+        rows = _description_rows(page)
+        try:
+            if rows.count() >= minimum_rows:
+                return
+        except Exception:
+            pass
+        page.wait_for_timeout(250)
+
+    raise RuntimeError(
+        "Tabela de descricao nao encontrada/insuficiente. "
+        "Ajuste os seletores de DESCRIPTION_TABLE_ROW_SELECTORS."
+    )
+
+
+def _description_rows(page: Page) -> Locator:
+    # Prioriza o primeiro seletor que encontrar ao menos uma linha.
+    for selector in DESCRIPTION_TABLE_ROW_SELECTORS:
+        locator = page.locator(selector)
+        try:
+            if locator.count() > 0:
+                return locator
+        except Exception:
+            continue
+    return page.locator(DESCRIPTION_TABLE_ROW_SELECTORS[0])
+
+
+def _find_row_for_option_description(
+    page: Page,
+    option_name: str,
+    timeout_ms: int,
+) -> Locator:
+    started = time.monotonic()
+    option_key = _normalize_text(option_name)
+    while (time.monotonic() - started) * 1000 < timeout_ms:
+        rows = _description_rows(page)
+        try:
+            count = rows.count()
+        except Exception:
+            count = 0
+
+        contains_match: Optional[Locator] = None
+        for idx in range(count):
+            row = rows.nth(idx)
+            try:
+                if not row.is_visible():
+                    continue
+                product_cell = row.locator("td[colid='col_18'] .d_ib").first
+                raw_text = product_cell.inner_text() if product_cell.count() > 0 else row.inner_text()
+                cell_key = _normalize_text(raw_text)
+                if not cell_key:
+                    continue
+                if cell_key == option_key:
+                    return row
+                if option_key in cell_key:
+                    contains_match = row
+            except Exception:
+                continue
+
+        if contains_match is not None:
+            return contains_match
+
+        page.wait_for_timeout(250)
+
+    raise RuntimeError(f"Nao encontrei linha de descricao para opcao: {option_name}")
+
+
+def _fill_single_row_description(
+    page: Page,
+    row: Locator,
+    option_name: str,
+    description_text: str,
+    timeout_ms: int,
+    log: LogCallback,
+) -> None:
+    clicked = _click_first_visible_in_scope(
+        scope=row,
+        page=page,
+        selectors=ROW_DESCRIPTION_ADD_SELECTORS,
+        timeout_ms=min(timeout_ms, 4000),
+    )
+    if not clicked:
+        # Fallback: abre editor clicando na celula de descricao da linha.
+        row.locator("td[colid='col_20'] .h_60").first.click()
+
+    input_locator = _first_visible_locator_in_scope(
+        scope=row,
+        page=page,
+        selectors=ROW_DESCRIPTION_INPUT_SELECTORS,
+        timeout_ms=2000,
+    )
+    if input_locator is None:
+        input_locator = _first_visible_locator(
+            page,
+            DESCRIPTION_EDITOR_INPUT_SELECTORS + GLOBAL_DESCRIPTION_INPUT_SELECTORS,
+            timeout_ms,
+        )[1]
+
+    _fill_locator_value(input_locator, description_text)
+    if not _click_first_visible_optional(page, DESCRIPTION_SAVE_SELECTORS, timeout_ms=1500):
+        if not _click_first_visible_optional(page, DESCRIPTION_BLUR_SELECTORS, timeout_ms=1000):
+            page.mouse.click(8, 8)
+    page.wait_for_timeout(300)
+
+    log(f"Descricao preenchida para opcao: {option_name}")
+
+
+def _normalize_text(value: str) -> str:
+    return " ".join(value.split()).strip().lower()
 
 
 def _save_error_screenshot(page: Optional[Page], artifacts_dir: Path) -> Optional[Path]:
@@ -344,6 +559,66 @@ def _first_visible_locator(page: Page, selectors: Iterable[str], timeout_ms: int
     raise RuntimeError(f"Nao encontrei elemento visivel para seletores: {list(selectors)}")
 
 
+def _first_visible_locator_in_scope(
+    scope: Locator,
+    page: Page,
+    selectors: Iterable[str],
+    timeout_ms: int,
+) -> Optional[Locator]:
+    started = time.monotonic()
+    while (time.monotonic() - started) * 1000 < timeout_ms:
+        for selector in selectors:
+            locator = scope.locator(selector)
+            try:
+                count = locator.count()
+            except Exception:
+                continue
+
+            for idx in range(count):
+                item = locator.nth(idx)
+                try:
+                    if item.is_visible():
+                        return item
+                except Exception:
+                    continue
+        page.wait_for_timeout(200)
+    return None
+
+
+def _click_first_visible_in_scope(
+    scope: Locator,
+    page: Page,
+    selectors: Iterable[str],
+    timeout_ms: int,
+) -> bool:
+    locator = _first_visible_locator_in_scope(scope, page, selectors, timeout_ms)
+    if locator is None:
+        return False
+    locator.click()
+    return True
+
+
+def _click_first_visible_optional(page: Page, selectors: Iterable[str], timeout_ms: int) -> bool:
+    try:
+        _, locator = _first_visible_locator(page, selectors, timeout_ms)
+        locator.click()
+        return True
+    except Exception:
+        return False
+
+
+def _fill_locator_value(locator: Locator, value: str) -> None:
+    tag_name = locator.evaluate("el => el.tagName.toLowerCase()")
+    if tag_name in {"input", "textarea"}:
+        locator.fill(value)
+        return
+
+    locator.click()
+    locator.press("ControlOrMeta+A")
+    locator.press("Backspace")
+    locator.type(value)
+
+
 def _click_first_visible(
     page: Page,
     selectors: list[str],
@@ -351,9 +626,8 @@ def _click_first_visible(
     label: str,
     log: LogCallback,
 ) -> None:
-    selector, locator = _first_visible_locator(page, selectors, timeout_ms)
+    _, locator = _first_visible_locator(page, selectors, timeout_ms)
     locator.click()
-    log(f"Clique em '{label}' usando seletor: {selector}")
 
 
 def _fill_first_visible(
@@ -364,9 +638,8 @@ def _fill_first_visible(
     label: str,
     log: LogCallback,
 ) -> None:
-    selector, locator = _first_visible_locator(page, selectors, timeout_ms)
+    _, locator = _first_visible_locator(page, selectors, timeout_ms)
     locator.fill(value)
-    log(f"Preenchido '{label}' com seletor: {selector}")
 
 
 def _ensure_variantes_selected(page: Page, timeout_ms: int, log: LogCallback) -> None:

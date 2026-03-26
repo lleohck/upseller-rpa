@@ -37,6 +37,7 @@ def main() -> int:
 
     keep_open = bool_env("UPSELLER_KEEP_OPEN", default=False)
     skip_variant_creation = bool_env("UPSELLER_SKIP_VARIANT_CREATION", default=False)
+    option_description_template = os.getenv("UPSELLER_OPTION_DESCRIPTION_TEMPLATE", "").strip() or None
 
     job_input = VariantJobInput(
         draft_url=draft_url,
@@ -48,6 +49,7 @@ def main() -> int:
         maximize_window=bool_env("UPSELLER_MAXIMIZE_WINDOW", default=True),
         keep_browser_open=keep_open,
         skip_variant_creation=skip_variant_creation,
+        option_description_template=option_description_template,
         action_timeout_ms=int(os.getenv("UPSELLER_ACTION_TIMEOUT_MS", "30000").strip() or "30000"),
         artifacts_dir=Path("artifacts"),
     )
@@ -66,6 +68,8 @@ def main() -> int:
         print("\nResumo:")
         print(f"- Criadas: {result.created_options}")
         print(f"- Ignoradas: {result.skipped_options}")
+        if option_description_template:
+            print(f"- Descricoes aplicadas: {result.described_options}")
     else:
         print("\nResumo:")
         print(f"- Erro: {result.error_message}")
