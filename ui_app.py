@@ -15,7 +15,6 @@ from typing import Optional
 
 import streamlit as st
 from dotenv import load_dotenv
-from playwright.sync_api import sync_playwright
 
 from rpa.variant_runner import normalize_option_names, normalize_price_brl
 
@@ -23,6 +22,7 @@ FORCED_HEADFUL = True
 FORCED_MAXIMIZE_WINDOW = True
 FORCED_KEEP_BROWSER_OPEN = True
 FORCED_ACTION_TIMEOUT_MS = 40000
+DEFAULT_UPSELLER_LOGIN_URL = "https://app.upseller.com/login"
 
 
 def bool_env(name: str, default: bool = False) -> bool:
@@ -340,76 +340,74 @@ def _start_manual_login_worker(login_url: str, maximize_window: bool) -> None:
     _append_login_log(f"Login manual iniciado (PID={process.pid}, CDP={cdp_url}).")
 
 
-def _score_state_for_domain(state: dict, domain_hint: str) -> int:
-    cookies = list(state.get("cookies", []))
-    origins = list(state.get("origins", []))
-    if not domain_hint:
-        return len(cookies) + len(origins)
-
-    hint = domain_hint.lower().strip()
-    cookie_hits = 0
-    for cookie in cookies:
-        domain = str(cookie.get("domain", "")).lower()
-        if hint in domain:
-            cookie_hits += 1
-
-    origin_hits = 0
-    for origin in origins:
-        origin_url = str(origin.get("origin", "")).lower()
-        if hint in origin_url:
-            origin_hits += 1
-
-    return (cookie_hits * 10) + origin_hits
-
-
 def _save_storage_state_via_cdp(cdp_url: str, storage_state_path: Path) -> tuple[str, int, int]:
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.connect_over_cdp(cdp_url)
-        try:
-            contexts = browser.contexts
-            if not contexts:
-                raise RuntimeError("Nenhum contexto ativo encontrado no navegador de login.")
+    if getattr(sys, "frozen", False):
+        cmd = [
+            sys.executable,
+            "--worker",
+            "save_state",
+            "--cdp-url",
+            cdp_url,
+            "--output",
+            str(storage_state_path),
+            "--domain-hint",
+            "upseller.com",
+        ]
+        worker_cwd = str(Path(sys.executable).resolve().parent)
+    else:
+        worker_script = Path(__file__).resolve().parent / "save_storage_state_worker.py"
+        if not worker_script.exists():
+            raise RuntimeError(f"Script de worker nao encontrado: {worker_script}")
+        cmd = [
+            sys.executable,
+            str(worker_script),
+            "--cdp-url",
+            cdp_url,
+            "--output",
+            str(storage_state_path),
+            "--domain-hint",
+            "upseller.com",
+        ]
+        worker_cwd = str(worker_script.parent)
 
-            selected_url = ""
-            domain_hint = "upseller.com"
-            best_state: Optional[dict] = None
-            best_score = -1
+    creationflags = 0
+    if os.name == "nt":
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
 
-            for context in contexts:
-                try:
-                    state = context.storage_state()
-                except Exception:
-                    continue
+    result = subprocess.run(
+        cmd,
+        cwd=worker_cwd,
+        capture_output=True,
+        text=True,
+        creationflags=creationflags,
+        check=False,
+    )
+    if result.returncode != 0:
+        error_message = (result.stderr or result.stdout or "").strip()
+        if error_message:
+            try:
+                payload = json.loads(error_message.splitlines()[-1])
+                if isinstance(payload, dict) and payload.get("error"):
+                    error_message = str(payload["error"])
+            except Exception:
+                pass
+        raise RuntimeError(error_message or "Falha ao salvar sessao via worker.")
 
-                score = _score_state_for_domain(state, domain_hint)
-                if score > best_score:
-                    best_state = state
-                    best_score = score
-                    for page in context.pages:
-                        current_url = (page.url or "").strip()
-                        if current_url and current_url != "about:blank":
-                            selected_url = current_url
-                            if domain_hint in current_url.lower():
-                                break
+    stdout = (result.stdout or "").strip()
+    if not stdout:
+        raise RuntimeError("Worker de sessao nao retornou saida.")
+    try:
+        payload = json.loads(stdout.splitlines()[-1])
+    except Exception as exc:
+        raise RuntimeError(f"Saida invalida do worker de sessao: {exc}")
 
-            if not best_state:
-                raise RuntimeError("Nao foi possivel obter dados de sessao via CDP.")
+    if not isinstance(payload, dict) or not payload.get("ok"):
+        raise RuntimeError(str(payload.get("error") if isinstance(payload, dict) else payload))
 
-            cookies_count = len(list(best_state.get("cookies", [])))
-            origins_count = len(list(best_state.get("origins", [])))
-            if cookies_count == 0 and origins_count == 0:
-                raise RuntimeError(
-                    "Sessao vazia detectada. Finalize o login no UpSeller e clique em OK novamente."
-                )
-
-            storage_state_path.parent.mkdir(parents=True, exist_ok=True)
-            storage_state_path.write_text(
-                json.dumps(best_state, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            return selected_url, cookies_count, origins_count
-        finally:
-            browser.close()
+    selected_url = str(payload.get("selected_url", "")).strip()
+    cookies_count = int(payload.get("cookies_count", 0))
+    origins_count = int(payload.get("origins_count", 0))
+    return selected_url, cookies_count, origins_count
 
 
 def _close_login_worker(log_message: Optional[str] = None) -> None:
@@ -676,7 +674,7 @@ def main() -> None:
     st.caption("Fase 2: interface para executar automação de variações com sessão salva.")
 
     storage_state_path = Path(os.getenv("STORAGE_STATE_PATH", "storage_state.json").strip() or "storage_state.json")
-    login_url = os.getenv("UPSELLER_LOGIN_URL", "").strip() or None
+    login_url = os.getenv("UPSELLER_LOGIN_URL", "").strip() or DEFAULT_UPSELLER_LOGIN_URL
 
     st.info(f"Storage state em uso: {storage_state_path}")
     if not storage_state_path.exists():

@@ -41,10 +41,12 @@ call :log "[2/5] Gerando executavel (onedir)..."
 "%VENV_PY%" -m PyInstaller --noconfirm --clean --onedir --name %APP_NAME% ^
   --collect-all streamlit ^
   --collect-all playwright ^
+  --hidden-import dotenv ^
   --hidden-import rpa ^
   --hidden-import rpa.variant_runner ^
   --hidden-import variant_job_worker ^
   --hidden-import login_manual_worker ^
+  --hidden-import save_storage_state_worker ^
   --add-data "%PROJECT_DIR%\ui_app.py;." ^
   --add-data "%PROJECT_DIR%\.env.example;." ^
   "%PROJECT_DIR%\run_ui.py" >> "%LOG_FILE%" 2>&1

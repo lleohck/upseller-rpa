@@ -83,6 +83,8 @@ def maybe_run_worker_mode(argv: list[str]) -> int | None:
         from variant_job_worker import main as worker_main
     elif worker_name == "login_manual":
         from login_manual_worker import main as worker_main
+    elif worker_name == "save_state":
+        from save_storage_state_worker import main as worker_main
     else:
         print(f"Worker invalido: {worker_name}")
         return 2
