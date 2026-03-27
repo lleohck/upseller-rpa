@@ -274,6 +274,17 @@ def _current_login_worker() -> Optional[dict]:
     return None
 
 
+def _frozen_worker_exe(name: str) -> Path:
+    base_dir = Path(sys.executable).resolve().parent
+    mapping = {
+        "login_manual": "login_manual_worker.exe",
+        "variant_job": "variant_job_worker.exe",
+        "save_state": "save_storage_state_worker.exe",
+    }
+    file_name = mapping.get(name, f"{name}.exe")
+    return base_dir / file_name
+
+
 def _start_manual_login_worker(login_url: str, maximize_window: bool) -> None:
     login_url = login_url.strip()
     if not login_url:
@@ -286,15 +297,25 @@ def _start_manual_login_worker(login_url: str, maximize_window: bool) -> None:
     cdp_url = f"http://127.0.0.1:{port}"
 
     if getattr(sys, "frozen", False):
-        cmd = [
-            sys.executable,
-            "--worker",
-            "login_manual",
-            "--login-url",
-            login_url,
-            "--cdp-port",
-            str(port),
-        ]
+        worker_exe = _frozen_worker_exe("login_manual")
+        if worker_exe.exists():
+            cmd = [
+                str(worker_exe),
+                "--login-url",
+                login_url,
+                "--cdp-port",
+                str(port),
+            ]
+        else:
+            cmd = [
+                sys.executable,
+                "--worker",
+                "login_manual",
+                "--login-url",
+                login_url,
+                "--cdp-port",
+                str(port),
+            ]
         worker_cwd = str(Path(sys.executable).resolve().parent)
     else:
         worker_script = Path(__file__).resolve().parent / "login_manual_worker.py"
@@ -342,17 +363,29 @@ def _start_manual_login_worker(login_url: str, maximize_window: bool) -> None:
 
 def _save_storage_state_via_cdp(cdp_url: str, storage_state_path: Path) -> tuple[str, int, int]:
     if getattr(sys, "frozen", False):
-        cmd = [
-            sys.executable,
-            "--worker",
-            "save_state",
-            "--cdp-url",
-            cdp_url,
-            "--output",
-            str(storage_state_path),
-            "--domain-hint",
-            "upseller.com",
-        ]
+        worker_exe = _frozen_worker_exe("save_state")
+        if worker_exe.exists():
+            cmd = [
+                str(worker_exe),
+                "--cdp-url",
+                cdp_url,
+                "--output",
+                str(storage_state_path),
+                "--domain-hint",
+                "upseller.com",
+            ]
+        else:
+            cmd = [
+                sys.executable,
+                "--worker",
+                "save_state",
+                "--cdp-url",
+                cdp_url,
+                "--output",
+                str(storage_state_path),
+                "--domain-hint",
+                "upseller.com",
+            ]
         worker_cwd = str(Path(sys.executable).resolve().parent)
     else:
         worker_script = Path(__file__).resolve().parent / "save_storage_state_worker.py"
@@ -429,17 +462,29 @@ def _start_variant_worker(payload: dict) -> None:
     request_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     if getattr(sys, "frozen", False):
-        cmd = [
-            sys.executable,
-            "--worker",
-            "variant_job",
-            "--request",
-            str(request_path),
-            "--result",
-            str(result_path),
-            "--log",
-            str(log_path),
-        ]
+        worker_exe = _frozen_worker_exe("variant_job")
+        if worker_exe.exists():
+            cmd = [
+                str(worker_exe),
+                "--request",
+                str(request_path),
+                "--result",
+                str(result_path),
+                "--log",
+                str(log_path),
+            ]
+        else:
+            cmd = [
+                sys.executable,
+                "--worker",
+                "variant_job",
+                "--request",
+                str(request_path),
+                "--result",
+                str(result_path),
+                "--log",
+                str(log_path),
+            ]
         worker_cwd = str(Path(sys.executable).resolve().parent)
     else:
         worker_script = Path(__file__).resolve().parent / "variant_job_worker.py"

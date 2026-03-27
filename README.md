@@ -77,6 +77,9 @@ Saida esperada: pasta `dist\\upseller-rpa-ui\\`
 
 Conteudo principal da pasta final:
 - `upseller-rpa-ui.exe`
+- `variant_job_worker.exe`
+- `login_manual_worker.exe`
+- `save_storage_state_worker.exe`
 - `start.bat`
 - `.env.example`
 - `ms-playwright\\` (browser embutido)
@@ -95,3 +98,4 @@ Observacoes:
 - Se abrir `localhost:3000` em branco, refaca o build com a versao mais recente deste projeto e use `start.bat`.
 - O `start.bat` abre automaticamente `http://127.0.0.1:8501`.
 - No Windows, o salvamento de sessao usa worker separado para evitar erro de `asyncio` no Streamlit.
+- No Windows, a automacao e os workers rodam por executaveis dedicados no pacote final.
