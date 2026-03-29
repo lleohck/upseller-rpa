@@ -59,43 +59,15 @@ python login.py
 python session.py
 ```
 
-## 6) Build de executavel Windows (sem Python no destino)
+## 6) Execucao no Windows (linha de comando)
 
 ```bat
-build_windows_exe.bat
+.venv\Scripts\activate
+python -m playwright install chromium
+python run_ui.py
 ```
-
-Se der erro e a janela fechar, rode pelo `cmd`:
-
-```bat
-build_windows_exe.bat
-```
-
-O script gera log em `build_windows_exe.log` com o detalhe do erro.
-
-Saida esperada: pasta `dist\\upseller-rpa-ui\\`
-
-Conteudo principal da pasta final:
-- `upseller-rpa-ui.exe`
-- `variant_job_worker.exe`
-- `login_manual_worker.exe`
-- `save_storage_state_worker.exe`
-- `start.bat`
-- `.env.example`
-- `ms-playwright\\` (browser embutido)
-
-### Publicacao para outro PC Windows
-
-1. Compacte a pasta `dist\\upseller-rpa-ui\\` em `.zip`.
-2. Copie para o computador final.
-3. Extraia em uma pasta simples (ex.: `C:\\UpSellerRPA\\`).
-4. Edite o `.env` (se nao existir, o `start.bat` cria a partir do `.env.example` na primeira execucao).
-5. Execute `start.bat`.
 
 Observacoes:
-- O computador destino nao precisa de Python/IDE.
-- Mantenha toda a pasta junta; nao execute apenas o `.exe` isolado.
-- Se abrir `localhost:3000` em branco, refaca o build com a versao mais recente deste projeto e use `start.bat`.
-- O `start.bat` abre automaticamente `http://127.0.0.1:8501`.
-- No Windows, o salvamento de sessao usa worker separado para evitar erro de `asyncio` no Streamlit.
-- No Windows, a automacao e os workers rodam por executaveis dedicados no pacote final.
+- Execute sempre pelo `cmd` ou PowerShell com a `.venv` ativada.
+- A UI sobe em `http://127.0.0.1:8501`.
+- O fluxo de login/salvamento de sessao e automacao roda por scripts Python auxiliares.

@@ -260,6 +260,13 @@ def _wait_cdp_ready(cdp_url: str, timeout_seconds: int = 20) -> bool:
     return False
 
 
+def _worker_python_executable() -> str:
+    configured = os.getenv("UPSELLER_PYTHON_EXE", "").strip()
+    if configured and Path(configured).exists():
+        return configured
+    return sys.executable
+
+
 def _current_login_worker() -> Optional[dict]:
     worker = st.session_state.get("login_worker")
     if not worker:
@@ -274,17 +281,6 @@ def _current_login_worker() -> Optional[dict]:
     return None
 
 
-def _frozen_worker_exe(name: str) -> Path:
-    base_dir = Path(sys.executable).resolve().parent
-    mapping = {
-        "login_manual": "login_manual_worker.exe",
-        "variant_job": "variant_job_worker.exe",
-        "save_state": "save_storage_state_worker.exe",
-    }
-    file_name = mapping.get(name, f"{name}.exe")
-    return base_dir / file_name
-
-
 def _start_manual_login_worker(login_url: str, maximize_window: bool) -> None:
     login_url = login_url.strip()
     if not login_url:
@@ -296,40 +292,18 @@ def _start_manual_login_worker(login_url: str, maximize_window: bool) -> None:
     port = _find_free_port()
     cdp_url = f"http://127.0.0.1:{port}"
 
-    if getattr(sys, "frozen", False):
-        worker_exe = _frozen_worker_exe("login_manual")
-        if worker_exe.exists():
-            cmd = [
-                str(worker_exe),
-                "--login-url",
-                login_url,
-                "--cdp-port",
-                str(port),
-            ]
-        else:
-            cmd = [
-                sys.executable,
-                "--worker",
-                "login_manual",
-                "--login-url",
-                login_url,
-                "--cdp-port",
-                str(port),
-            ]
-        worker_cwd = str(Path(sys.executable).resolve().parent)
-    else:
-        worker_script = Path(__file__).resolve().parent / "login_manual_worker.py"
-        if not worker_script.exists():
-            raise RuntimeError(f"Script de worker nao encontrado: {worker_script}")
-        cmd = [
-            sys.executable,
-            str(worker_script),
-            "--login-url",
-            login_url,
-            "--cdp-port",
-            str(port),
-        ]
-        worker_cwd = str(worker_script.parent)
+    worker_script = Path(__file__).resolve().parent / "login_manual_worker.py"
+    if not worker_script.exists():
+        raise RuntimeError(f"Script de worker nao encontrado: {worker_script}")
+    cmd = [
+        _worker_python_executable(),
+        str(worker_script),
+        "--login-url",
+        login_url,
+        "--cdp-port",
+        str(port),
+    ]
+    worker_cwd = str(worker_script.parent)
 
     if maximize_window:
         cmd.append("--maximize")
@@ -362,46 +336,20 @@ def _start_manual_login_worker(login_url: str, maximize_window: bool) -> None:
 
 
 def _save_storage_state_via_cdp(cdp_url: str, storage_state_path: Path) -> tuple[str, int, int]:
-    if getattr(sys, "frozen", False):
-        worker_exe = _frozen_worker_exe("save_state")
-        if worker_exe.exists():
-            cmd = [
-                str(worker_exe),
-                "--cdp-url",
-                cdp_url,
-                "--output",
-                str(storage_state_path),
-                "--domain-hint",
-                "upseller.com",
-            ]
-        else:
-            cmd = [
-                sys.executable,
-                "--worker",
-                "save_state",
-                "--cdp-url",
-                cdp_url,
-                "--output",
-                str(storage_state_path),
-                "--domain-hint",
-                "upseller.com",
-            ]
-        worker_cwd = str(Path(sys.executable).resolve().parent)
-    else:
-        worker_script = Path(__file__).resolve().parent / "save_storage_state_worker.py"
-        if not worker_script.exists():
-            raise RuntimeError(f"Script de worker nao encontrado: {worker_script}")
-        cmd = [
-            sys.executable,
-            str(worker_script),
-            "--cdp-url",
-            cdp_url,
-            "--output",
-            str(storage_state_path),
-            "--domain-hint",
-            "upseller.com",
-        ]
-        worker_cwd = str(worker_script.parent)
+    worker_script = Path(__file__).resolve().parent / "save_storage_state_worker.py"
+    if not worker_script.exists():
+        raise RuntimeError(f"Script de worker nao encontrado: {worker_script}")
+    cmd = [
+        _worker_python_executable(),
+        str(worker_script),
+        "--cdp-url",
+        cdp_url,
+        "--output",
+        str(storage_state_path),
+        "--domain-hint",
+        "upseller.com",
+    ]
+    worker_cwd = str(worker_script.parent)
 
     creationflags = 0
     if os.name == "nt":
@@ -453,54 +401,30 @@ def _close_login_worker(log_message: Optional[str] = None) -> None:
 
 
 def _start_variant_worker(payload: dict) -> None:
-    artifacts_dir = Path(payload.get("artifacts_dir", "artifacts"))
+    artifacts_dir = Path(payload.get("artifacts_dir", "artifacts")).expanduser()
+    if not artifacts_dir.is_absolute():
+        artifacts_dir = (Path(__file__).resolve().parent / artifacts_dir).resolve()
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     job_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    request_path = artifacts_dir / f"variant_job_{job_id}_request.json"
-    result_path = artifacts_dir / f"variant_job_{job_id}_result.json"
-    log_path = artifacts_dir / f"variant_job_{job_id}.log"
+    request_path = (artifacts_dir / f"variant_job_{job_id}_request.json").resolve()
+    result_path = (artifacts_dir / f"variant_job_{job_id}_result.json").resolve()
+    log_path = (artifacts_dir / f"variant_job_{job_id}.log").resolve()
     request_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    if getattr(sys, "frozen", False):
-        worker_exe = _frozen_worker_exe("variant_job")
-        if worker_exe.exists():
-            cmd = [
-                str(worker_exe),
-                "--request",
-                str(request_path),
-                "--result",
-                str(result_path),
-                "--log",
-                str(log_path),
-            ]
-        else:
-            cmd = [
-                sys.executable,
-                "--worker",
-                "variant_job",
-                "--request",
-                str(request_path),
-                "--result",
-                str(result_path),
-                "--log",
-                str(log_path),
-            ]
-        worker_cwd = str(Path(sys.executable).resolve().parent)
-    else:
-        worker_script = Path(__file__).resolve().parent / "variant_job_worker.py"
-        if not worker_script.exists():
-            raise RuntimeError(f"Script de worker nao encontrado: {worker_script}")
-        cmd = [
-            sys.executable,
-            str(worker_script),
-            "--request",
-            str(request_path),
-            "--result",
-            str(result_path),
-            "--log",
-            str(log_path),
-        ]
-        worker_cwd = str(worker_script.parent)
+    worker_script = Path(__file__).resolve().parent / "variant_job_worker.py"
+    if not worker_script.exists():
+        raise RuntimeError(f"Script de worker nao encontrado: {worker_script}")
+    cmd = [
+        _worker_python_executable(),
+        str(worker_script),
+        "--request",
+        str(request_path),
+        "--result",
+        str(result_path),
+        "--log",
+        str(log_path),
+    ]
+    worker_cwd = str(worker_script.parent)
 
     creationflags = 0
     if os.name == "nt":
@@ -518,12 +442,22 @@ def _start_variant_worker(payload: dict) -> None:
     finally:
         worker_log_fp.close()
 
+    time.sleep(0.8)
+    return_code = process.poll()
+    if return_code is not None:
+        log_tail = _read_log_tail(log_path, max_lines=50)
+        reason = f"Worker da automacao encerrou imediatamente (codigo {return_code})."
+        if log_tail.strip():
+            raise RuntimeError(f"{reason}\n\nUltimas linhas do log:\n{log_tail}")
+        raise RuntimeError(reason)
+
     st.session_state["variant_worker"] = {
         "pid": process.pid,
         "request_path": str(request_path),
         "result_path": str(result_path),
         "log_path": str(log_path),
         "started_at": _now(),
+        "started_ts": time.time(),
         "cancelled": False,
     }
 
@@ -545,20 +479,35 @@ def _render_variant_worker_panel() -> None:
     log_path = Path(worker["log_path"])
     result_path = Path(worker["result_path"])
 
+    # Se ja existe resultado, tratamos como finalizado para evitar falso "running"
+    # por reaproveitamento de PID no Windows.
+    if result_path.exists():
+        running = False
+
     st.subheader("Execução da Automação")
     if running:
         st.info(f"Automação em execução (PID {pid}).")
+        st.caption(f"Log: {log_path}")
         auto_refresh = True
     elif worker.get("cancelled"):
         st.warning("Automação cancelada.")
         auto_refresh = False
     else:
         st.info("Automação finalizada.")
+        st.caption(f"Log: {log_path}")
         auto_refresh = False
 
     log_text = _read_log_tail(log_path)
     if log_text:
         st.code(log_text, language="text")
+    elif running:
+        elapsed = max(0, int(time.time() - float(worker.get("started_ts", time.time()))))
+        st.caption(f"Aguardando logs do worker... {elapsed}s")
+        if elapsed >= 20:
+            st.warning(
+                "Worker ativo sem emitir logs por mais de 20s. "
+                "Clique em cancelar e compartilhe o caminho do log para diagnostico."
+            )
 
     col1, col2 = st.columns(2)
     with col1:
