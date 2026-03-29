@@ -16,7 +16,7 @@ from typing import Optional
 import streamlit as st
 from dotenv import load_dotenv
 
-from rpa.variant_runner import normalize_option_names, normalize_price_brl
+from rpa.variant_runner import VariantJobInput, normalize_option_names, normalize_price_brl, run_variant_job
 
 FORCED_HEADFUL = True
 FORCED_MAXIMIZE_WINDOW = True
@@ -400,6 +400,91 @@ def _close_login_worker(log_message: Optional[str] = None) -> None:
         _append_login_log(log_message)
 
 
+def _run_variant_direct(payload: dict) -> tuple[dict, str]:
+    artifacts_dir = Path(payload.get("artifacts_dir", "artifacts")).expanduser()
+    if not artifacts_dir.is_absolute():
+        artifacts_dir = (Path(__file__).resolve().parent / artifacts_dir).resolve()
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+    job_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    request_path = (artifacts_dir / f"variant_job_{job_id}_request.json").resolve()
+    result_path = (artifacts_dir / f"variant_job_{job_id}_result.json").resolve()
+    log_path = (artifacts_dir / f"variant_job_{job_id}.log").resolve()
+    request_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    job_input = VariantJobInput(
+        draft_url=str(payload["draft_url"]),
+        variant_name=str(payload.get("variant_name", "")),
+        option_names=list(payload["option_names"]),
+        storage_state_path=Path(str(payload["storage_state_path"])),
+        login_url=payload.get("login_url") or None,
+        headful=bool(payload.get("headful", True)),
+        maximize_window=bool(payload.get("maximize_window", True)),
+        keep_browser_open=bool(payload.get("keep_browser_open", True)),
+        skip_variant_creation=bool(payload.get("skip_variant_creation", False)),
+        option_description_template=payload.get("option_description_template") or None,
+        option_price_brl=payload.get("option_price_brl") or None,
+        apply_variant_images=bool(payload.get("apply_variant_images", False)),
+        action_timeout_ms=int(payload.get("action_timeout_ms", 40000)),
+        artifacts_dir=artifacts_dir,
+    )
+
+    lines: list[str] = []
+    live_log_box = st.empty()
+
+    def on_log(line: str) -> None:
+        lines.append(line)
+        with log_path.open("a", encoding="utf-8") as fp:
+            fp.write(line + "\n")
+        print(line, flush=True)
+        live_log_box.code("\n".join(lines[-300:]), language="text")
+
+    def write_result_json(result_obj) -> None:
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = result_path.with_suffix(".tmp.json")
+        tmp_path.write_text(result_obj.to_json(), encoding="utf-8")
+        tmp_path.replace(result_path)
+
+    result_obj = run_variant_job(
+        job_input=job_input,
+        log_cb=on_log,
+        result_ready_cb=write_result_json,
+    )
+    result_data = result_obj.to_dict()
+    result_path.write_text(json.dumps(result_data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return result_data, str(log_path)
+
+
+def _render_last_variant_result() -> None:
+    result = st.session_state.get("last_variant_result")
+    request_payload = st.session_state.get("last_variant_request")
+    log_path_str = st.session_state.get("last_variant_log_path")
+    if not result or not request_payload:
+        return
+
+    st.subheader("Resultado da Última Execução")
+    if log_path_str:
+        st.caption(f"Log: {log_path_str}")
+        log_text = _read_log_tail(Path(log_path_str))
+        if log_text:
+            st.code(log_text, language="text")
+
+    render_summary(
+        success=bool(result.get("success")),
+        created=list(result.get("created_options", [])),
+        skipped=list(result.get("skipped_options", [])),
+        described=list(result.get("described_options", [])),
+        priced=list(result.get("priced_options", [])),
+        media_images_applied=bool(result.get("media_images_applied", False)),
+        error_message=result.get("error_message"),
+    )
+    render_visual_result_component(result=result, request_payload=request_payload)
+    render_final_checklist(result=result, request_payload=request_payload)
+    render_print_component(result=result)
+    with st.expander("Detalhes (JSON)"):
+        st.json(result)
+
+
 def _start_variant_worker(payload: dict) -> None:
     artifacts_dir = Path(payload.get("artifacts_dir", "artifacts")).expanduser()
     if not artifacts_dir.is_absolute():
@@ -733,14 +818,6 @@ def main() -> None:
         submit = st.form_submit_button("Executar RPA", use_container_width=True)
 
     if submit:
-        running_worker = st.session_state.get("variant_worker")
-        if running_worker and _is_pid_running(int(running_worker.get("pid", 0))):
-            st.warning("Ja existe uma automação em execução. Cancele ou aguarde finalizar.")
-            _render_variant_worker_panel()
-            st.divider()
-            render_login_section(storage_state_path=storage_state_path, default_login_url=login_url)
-            return
-
         options = normalize_option_names(option_names_raw)
         option_price_brl = option_price_brl_raw.strip() or None
         price_error: Optional[str] = None
@@ -776,12 +853,18 @@ def main() -> None:
                 "artifacts_dir": "artifacts",
             }
             try:
-                _start_variant_worker(payload)
-                st.success("Automação iniciada. Use o botão vermelho para cancelar quando necessário.")
+                with st.spinner("Executando automacao... acompanhe os logs abaixo."):
+                    result_data, log_path = _run_variant_direct(payload)
+                st.session_state["last_variant_result"] = result_data
+                st.session_state["last_variant_request"] = payload
+                st.session_state["last_variant_log_path"] = log_path
+                if bool(result_data.get("success")):
+                    st.success("Automação concluída.")
+                else:
+                    st.error("Automação finalizada com falha. Veja os logs e o resumo.")
             except Exception as exc:
                 st.error(f"Falha ao iniciar automação: {exc}")
-
-    _render_variant_worker_panel()
+    _render_last_variant_result()
 
     st.divider()
     render_login_section(storage_state_path=storage_state_path, default_login_url=login_url)
