@@ -412,6 +412,16 @@ def _run_variant_direct(payload: dict) -> tuple[dict, str]:
     log_path = (artifacts_dir / f"variant_job_{job_id}.log").resolve()
     request_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    # No Windows, a execucao direta no thread do Streamlit pode disparar
+    # NotImplementedError do asyncio/subprocess dentro do Playwright.
+    # Nesse caso, usamos worker dedicado de forma bloqueante.
+    if os.name == "nt":
+        return _run_variant_via_worker_blocking(
+            request_path=request_path,
+            result_path=result_path,
+            log_path=log_path,
+        )
+
     job_input = VariantJobInput(
         draft_url=str(payload["draft_url"]),
         variant_name=str(payload.get("variant_name", "")),
@@ -453,6 +463,55 @@ def _run_variant_direct(payload: dict) -> tuple[dict, str]:
     result_data = result_obj.to_dict()
     result_path.write_text(json.dumps(result_data, ensure_ascii=False, indent=2), encoding="utf-8")
     return result_data, str(log_path)
+
+
+def _run_variant_via_worker_blocking(request_path: Path, result_path: Path, log_path: Path) -> tuple[dict, str]:
+    worker_script = Path(__file__).resolve().parent / "variant_job_worker.py"
+    if not worker_script.exists():
+        raise RuntimeError(f"Script de worker nao encontrado: {worker_script}")
+
+    cmd = [
+        _worker_python_executable(),
+        str(worker_script),
+        "--request",
+        str(request_path),
+        "--result",
+        str(result_path),
+        "--log",
+        str(log_path),
+    ]
+
+    live_log_box = st.empty()
+    worker_log_fp = log_path.open("a", encoding="utf-8")
+    try:
+        process = subprocess.Popen(
+            cmd,
+            cwd=str(worker_script.parent),
+            stdout=worker_log_fp,
+            stderr=worker_log_fp,
+        )
+    finally:
+        worker_log_fp.close()
+
+    while True:
+        log_text = _read_log_tail(log_path)
+        if log_text:
+            live_log_box.code(log_text, language="text")
+            print(log_text.splitlines()[-1], flush=True)
+        return_code = process.poll()
+        if return_code is not None:
+            break
+        time.sleep(0.5)
+
+    if result_path.exists():
+        result_data = json.loads(result_path.read_text(encoding="utf-8"))
+        return result_data, str(log_path)
+
+    tail = _read_log_tail(log_path, max_lines=120)
+    raise RuntimeError(
+        f"Worker finalizou sem gerar resultado (codigo {return_code}).\n\n"
+        f"Ultimas linhas do log:\n{tail or '[sem log]'}"
+    )
 
 
 def _render_last_variant_result() -> None:
