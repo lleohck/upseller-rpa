@@ -143,6 +143,7 @@ class VariantJobInput:
     keep_browser_open: bool = False
     skip_variant_creation: bool = False
     option_description_template: Optional[str] = None
+    has_local_field: bool = False
     option_price_brl: Optional[str] = None
     apply_variant_images: bool = False
     action_timeout_ms: int = 30000
@@ -369,6 +370,7 @@ def run_variant_job(
                         template=job_input.option_description_template,
                         timeout_ms=job_input.action_timeout_ms,
                         log=log,
+                        has_local_field=job_input.has_local_field,
                     )
                     result.described_options.extend(described)
 
@@ -490,6 +492,7 @@ def _fill_descriptions_for_options(
     template: str,
     timeout_ms: int,
     log: LogCallback,
+    has_local_field: bool = False,
 ) -> list[str]:
     if "{{OPTION_NAME}}" not in template:
         log(
@@ -498,12 +501,31 @@ def _fill_descriptions_for_options(
         )
 
     _wait_for_table_rows(page, minimum_rows=1, timeout_ms=timeout_ms)
+    user_colid, description_colid = _resolve_description_colids(
+        page=page,
+        timeout_ms=timeout_ms,
+        has_local_field=has_local_field,
+        log=log,
+    )
     described_options: list[str] = []
 
     for option_name in option_names:
         description_text = template.replace("{{OPTION_NAME}}", option_name)
-        row = _find_row_for_option_description(page, option_name, timeout_ms=timeout_ms)
-        _fill_single_row_description(page, row, option_name, description_text, timeout_ms, log)
+        row = _find_row_for_option_description(
+            page,
+            option_name,
+            timeout_ms=timeout_ms,
+            user_colid=user_colid,
+        )
+        _fill_single_row_description(
+            page,
+            row,
+            option_name,
+            description_text,
+            timeout_ms,
+            log,
+            description_colid=description_colid,
+        )
         described_options.append(option_name)
 
     return described_options
@@ -542,6 +564,7 @@ def _find_row_for_option_description(
     page: Page,
     option_name: str,
     timeout_ms: int,
+    user_colid: str,
 ) -> Locator:
     started = time.monotonic()
     option_key = _normalize_text(option_name)
@@ -558,7 +581,7 @@ def _find_row_for_option_description(
             try:
                 if not row.is_visible():
                     continue
-                product_cell = row.locator("td[colid='col_18'] .d_ib").first
+                product_cell = row.locator(f"td[colid='{user_colid}'] .d_ib").first
                 raw_text = product_cell.inner_text() if product_cell.count() > 0 else row.inner_text()
                 cell_key = _normalize_text(raw_text)
                 if not cell_key:
@@ -585,6 +608,7 @@ def _fill_single_row_description(
     description_text: str,
     timeout_ms: int,
     log: LogCallback,
+    description_colid: str,
 ) -> None:
     clicked = _click_first_visible_in_scope(
         scope=row,
@@ -594,7 +618,14 @@ def _fill_single_row_description(
     )
     if not clicked:
         # Fallback: abre editor clicando na celula de descricao da linha.
-        row.locator("td[colid='col_20'] .h_60").first.click()
+        description_cell = row.locator(f"td[colid='{description_colid}']").first
+        if description_cell.count() > 0:
+            try:
+                description_cell.locator(".h_60").first.click()
+            except Exception:
+                description_cell.click()
+        else:
+            row.locator("td").last.click()
 
     input_locator = _first_visible_locator_in_scope(
         scope=row,
@@ -616,6 +647,52 @@ def _fill_single_row_description(
     page.wait_for_timeout(300)
 
     log(f"Descricao preenchida para opcao: {option_name}")
+
+
+def _resolve_description_colids(
+    page: Page,
+    timeout_ms: int,
+    has_local_field: bool,
+    log: LogCallback,
+) -> tuple[str, str]:
+    if not has_local_field:
+        return "col_18", "col_20"
+
+    started = time.monotonic()
+    while (time.monotonic() - started) * 1000 < timeout_ms:
+        headers = page.locator("#description th[colid]")
+        try:
+            count = headers.count()
+        except Exception:
+            count = 0
+
+        if count > 0:
+            user_colid: Optional[str] = None
+            description_colid: Optional[str] = None
+
+            for idx in range(count):
+                th = headers.nth(idx)
+                try:
+                    colid = (th.get_attribute("colid") or "").strip()
+                    header_text = _normalize_text(th.inner_text())
+                except Exception:
+                    continue
+
+                if not colid:
+                    continue
+                if ("user product" in header_text or header_text == "user product") and not user_colid:
+                    user_colid = colid
+                if ("descricao" in header_text or "descrição" in header_text) and not description_colid:
+                    description_colid = colid
+
+            if user_colid and description_colid:
+                log(f"Modo 'Local' ativo: colunas detectadas dinamicamente (user={user_colid}, descricao={description_colid}).")
+                return user_colid, description_colid
+
+        page.wait_for_timeout(250)
+
+    log("Modo 'Local' ativo, mas nao foi possivel detectar colunas dinamicamente. Usando fallback padrao.")
+    return "col_18", "col_20"
 
 
 def _fill_prices_for_options(

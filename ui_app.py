@@ -433,6 +433,7 @@ def _run_variant_direct(payload: dict) -> tuple[dict, str]:
         keep_browser_open=bool(payload.get("keep_browser_open", True)),
         skip_variant_creation=bool(payload.get("skip_variant_creation", False)),
         option_description_template=payload.get("option_description_template") or None,
+        has_local_field=bool(payload.get("has_local_field", False)),
         option_price_brl=payload.get("option_price_brl") or None,
         apply_variant_images=bool(payload.get("apply_variant_images", False)),
         action_timeout_ms=int(payload.get("action_timeout_ms", 40000)),
@@ -862,6 +863,11 @@ def main() -> None:
             placeholder="Descrição da opção {{OPTION_NAME}} xxxxxxxx",
             help="Use {{OPTION_NAME}} para injetar automaticamente o nome de cada opção.",
         )
+        has_local_field = st.checkbox(
+            "Possui campo Local?",
+            value=bool_env("UPSELLER_HAS_LOCAL_FIELD", default=False),
+            help="Ativa seletores alternativos para preencher descrição em páginas com campo Local.",
+        )
         option_price_brl_raw = st.text_input(
             "Preço (R$) das opções (opcional)",
             value=os.getenv("UPSELLER_OPTION_PRICE_BRL", "").strip(),
@@ -906,6 +912,7 @@ def main() -> None:
                 "keep_browser_open": FORCED_KEEP_BROWSER_OPEN,
                 "skip_variant_creation": skip_variant_creation,
                 "option_description_template": option_description_template.strip() or None,
+                "has_local_field": has_local_field,
                 "option_price_brl": option_price_brl,
                 "apply_variant_images": apply_variant_images,
                 "action_timeout_ms": FORCED_ACTION_TIMEOUT_MS,

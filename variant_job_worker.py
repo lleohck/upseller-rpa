@@ -66,6 +66,7 @@ def main() -> int:
             keep_browser_open=bool(payload.get("keep_browser_open", True)),
             skip_variant_creation=bool(payload.get("skip_variant_creation", False)),
             option_description_template=payload.get("option_description_template") or None,
+            has_local_field=bool(payload.get("has_local_field", False)),
             option_price_brl=payload.get("option_price_brl") or None,
             apply_variant_images=bool(payload.get("apply_variant_images", False)),
             action_timeout_ms=int(payload.get("action_timeout_ms", 40000)),

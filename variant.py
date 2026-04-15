@@ -38,6 +38,7 @@ def main() -> int:
     keep_open = bool_env("UPSELLER_KEEP_OPEN", default=False)
     skip_variant_creation = bool_env("UPSELLER_SKIP_VARIANT_CREATION", default=False)
     option_description_template = os.getenv("UPSELLER_OPTION_DESCRIPTION_TEMPLATE", "").strip() or None
+    has_local_field = bool_env("UPSELLER_HAS_LOCAL_FIELD", default=False)
     option_price_brl = os.getenv("UPSELLER_OPTION_PRICE_BRL", "").strip() or None
     apply_variant_images = bool_env("UPSELLER_APPLY_VARIANT_IMAGES", default=False)
 
@@ -52,6 +53,7 @@ def main() -> int:
         keep_browser_open=keep_open,
         skip_variant_creation=skip_variant_creation,
         option_description_template=option_description_template,
+        has_local_field=has_local_field,
         option_price_brl=option_price_brl,
         apply_variant_images=apply_variant_images,
         action_timeout_ms=int(os.getenv("UPSELLER_ACTION_TIMEOUT_MS", "30000").strip() or "30000"),
