@@ -48,27 +48,44 @@ LOGIN_PASSWORD_SELECTORS = [
     "input[autocomplete='current-password']",
 ]
 DESCRIPTION_TABLE_ROW_SELECTORS = [
+    "table.vxe-table--body tbody tr.vxe-body--row",
     "div.sales_table_wrap tbody tr.vxe-body--row",
     "div.sales_table_wrap .vxe-table--body tbody tr",
+    "tr.vxe-body--row",
 ]
 ROW_DESCRIPTION_ADD_SELECTORS = [
+    "span.my_txt_btn:has-text('+Adicionar')",
     "span.my_txt_btn:has-text('Adicionar')",
+    "div span.my_txt_btn:has-text('+Adicionar')",
+    "div span.my_txt_btn:has-text('Adicionar')",
+    "div:has(span.my_txt_btn:has-text('+Adicionar'))",
+    "div:has(span.my_txt_btn:has-text('Adicionar'))",
     "i.edit_btn.anticon-edit",
     "i.anticon-edit",
+    ".edit_btn",
+    ".h_60",
 ]
 ROW_DESCRIPTION_INPUT_SELECTORS = [
+    "div.descript_modal textarea",
+    "div.descript_modal input[type='text']",
+    "div.descript_modal input.ant-input",
     "textarea",
     "div[contenteditable='true']",
     "input.ant-input",
+    "input[type='text']",
 ]
 DESCRIPTION_EDITOR_INPUT_SELECTORS = [
     "div.descript_modal textarea",
+    "div.descript_modal input[type='text']",
     "div.descript_modal input.ant-input",
     ".descript_modal textarea",
+    ".descript_modal input[type='text']",
     ".descript_modal input.ant-input",
     ".ant-modal-root textarea",
+    ".ant-modal-root input[type='text']",
     ".ant-modal-root input.ant-input",
     ".ant-popover textarea",
+    ".ant-popover input[type='text']",
     ".ant-popover input.ant-input",
 ]
 GLOBAL_DESCRIPTION_INPUT_SELECTORS = [
@@ -581,8 +598,12 @@ def _find_row_for_option_description(
             try:
                 if not row.is_visible():
                     continue
-                product_cell = row.locator(f"td[colid='{user_colid}'] .d_ib").first
-                raw_text = product_cell.inner_text() if product_cell.count() > 0 else row.inner_text()
+
+                product_locator = row.locator(f"td[colid='{user_colid}'] .d_ib")
+                if product_locator.count() == 0:
+                    product_locator = row.locator(f"td[colid='{user_colid}']")
+
+                raw_text = product_locator.inner_text() if product_locator.count() > 0 else row.inner_text()
                 cell_key = _normalize_text(raw_text)
                 if not cell_key:
                     continue
@@ -596,7 +617,7 @@ def _find_row_for_option_description(
         if contains_match is not None:
             return contains_match
 
-        page.wait_for_timeout(250)
+        page.wait_for_timeout(100)
 
     raise RuntimeError(f"Nao encontrei linha de descricao para opcao: {option_name}")
 
@@ -610,42 +631,75 @@ def _fill_single_row_description(
     log: LogCallback,
     description_colid: str,
 ) -> None:
-    clicked = _click_first_visible_in_scope(
-        scope=row,
-        page=page,
-        selectors=ROW_DESCRIPTION_ADD_SELECTORS,
-        timeout_ms=min(timeout_ms, 4000),
-    )
-    if not clicked:
-        # Fallback: abre editor clicando na celula de descricao da linha.
-        description_cell = row.locator(f"td[colid='{description_colid}']").first
-        if description_cell.count() > 0:
-            try:
-                description_cell.locator(".h_60").first.click()
-            except Exception:
-                description_cell.click()
-        else:
-            row.locator("td").last.click()
+    description_cell = row.locator(f"td[colid='{description_colid}']").first
 
-    input_locator = _first_visible_locator_in_scope(
-        scope=row,
-        page=page,
-        selectors=ROW_DESCRIPTION_INPUT_SELECTORS,
-        timeout_ms=2000,
-    )
-    if input_locator is None:
-        input_locator = _first_visible_locator(
+    def _locate_textarea() -> Optional[Locator]:
+        locator = description_cell.locator("textarea.ant-input").first
+        try:
+            if locator.count() > 0 and locator.is_visible():
+                return locator
+        except Exception:
+            pass
+        return None
+
+    textarea_locator = _locate_textarea()
+    if textarea_locator is None:
+        log(f"[DEBUG] Procurando botao +Adicionar/edit para: {option_name}")
+        clicked = _click_first_visible_in_scope(
+            scope=row,
+            page=page,
+            selectors=ROW_DESCRIPTION_ADD_SELECTORS,
+            timeout_ms=min(timeout_ms, 2500),
+        )
+        if not clicked:
+            log(f"[DEBUG] Nao encontrou botao de Adicionar, tentando clicar na celula de descricao para: {option_name}")
+            try:
+                if description_cell.count() > 0:
+                    description_cell.click()
+            except Exception:
+                try:
+                    row.locator("td").last.click()
+                except Exception:
+                    pass
+
+        try:
+            textarea_locator = description_cell.locator("textarea.ant-input").first
+            textarea_locator.wait_for(state="visible", timeout=2000)
+        except Exception:
+            textarea_locator = _locate_textarea()
+
+    if textarea_locator is None:
+        log(f"[DEBUG] Procurando textarea globalmente para: {option_name}")
+        textarea_locator = _first_visible_locator_in_scope(
+            scope=row,
+            page=page,
+            selectors=["textarea.ant-input", "textarea"],
+            timeout_ms=2000,
+        )
+
+    if textarea_locator is None:
+        _, textarea_locator = _first_visible_locator(
             page,
             DESCRIPTION_EDITOR_INPUT_SELECTORS + GLOBAL_DESCRIPTION_INPUT_SELECTORS,
-            timeout_ms,
-        )[1]
+            min(timeout_ms, 3000),
+        )
 
-    _fill_locator_value(input_locator, description_text)
-    if not _click_first_visible_optional(page, DESCRIPTION_SAVE_SELECTORS, timeout_ms=1500):
-        if not _click_first_visible_optional(page, DESCRIPTION_BLUR_SELECTORS, timeout_ms=1000):
-            page.mouse.click(8, 8)
+    log(f"[DEBUG] Preenchendo textarea com descricao para: {option_name}")
+    _fill_locator_value(textarea_locator, description_text)
+
+    try:
+        textarea_locator.press("Tab")
+    except Exception:
+        pass
+
+    if not _click_first_visible_optional(page, DESCRIPTION_SAVE_SELECTORS, timeout_ms=800):
+        try:
+            if description_cell.count() > 0:
+                description_cell.locator(".ant-card-head").first.click()
+        except Exception:
+            pass
+
     page.wait_for_timeout(300)
-
     log(f"Descricao preenchida para opcao: {option_name}")
 
 
@@ -656,7 +710,7 @@ def _resolve_description_colids(
     log: LogCallback,
 ) -> tuple[str, str]:
     if not has_local_field:
-        return "col_18", "col_20"
+        return "col_19", "col_21"
 
     started = time.monotonic()
     while (time.monotonic() - started) * 1000 < timeout_ms:
@@ -692,7 +746,7 @@ def _resolve_description_colids(
         page.wait_for_timeout(250)
 
     log("Modo 'Local' ativo, mas nao foi possivel detectar colunas dinamicamente. Usando fallback padrao.")
-    return "col_18", "col_20"
+    return "col_19", "col_21"
 
 
 def _fill_prices_for_options(
